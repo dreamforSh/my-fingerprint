@@ -1,5 +1,5 @@
 import { useDebounceCallback } from "@/utils/hooks"
-import { Button, Input, Popconfirm, Space } from "antd"
+import { Button, Input, Popconfirm, Segmented, Space } from "antd"
 import { useMemo, useState } from "react"
 import {
   DeleteOutlined,
@@ -93,22 +93,15 @@ export const PoliciesView = (props: WhitelistProps) => {
   }
 
   return <section className="h-full flex flex-col gap-2">
-    <div className="flex gap-2">
-      <Button
-        className="grow"
-        color={!policies?.isBlacklistMode ? 'primary' : 'default'}
-        variant={!policies?.isBlacklistMode ? 'solid' : 'outlined'}
-        onClick={() => switchIsBlacklistMode(false)}>
-        {t('label.policies.exclude-only')}
-      </Button>
-      <Button
-        className="grow"
-        color={policies?.isBlacklistMode ? 'primary' : 'default'}
-        variant={policies?.isBlacklistMode ? 'solid' : 'outlined'}
-        onClick={() => switchIsBlacklistMode(true)}>
-        {t('label.policies.inject-only')}
-      </Button>
-    </div>
+    <Segmented<boolean>
+      block
+      value={!!policies?.isBlacklistMode}
+      onChange={switchIsBlacklistMode}
+      options={[
+        { value: false, label: t('label.policies.exclude-only') },
+        { value: true, label: t('label.policies.inject-only') },
+      ]}
+    />
     <div className="h-full flex flex-col rounded-lg bg-[--ant-color-bg-container]">
       <Space.Compact>
         <Input

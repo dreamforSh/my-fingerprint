@@ -24,7 +24,7 @@
 }
 
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   font-size: 20px;
   line-height: 24px;
   font-weight: 400;
@@ -52,6 +52,17 @@
   --default-700: #3f3f46;
   --default-800: #27272a;
   --default-900: #18181b;
+
+  --success-50: #e9faf3;
+  --success-100: #cdf3e3;
+  --success-200: #9ce7c8;
+  --success-300: #6adbac;
+  --success-400: #3ddca6;
+  --success-500: #1fc18a;
+  --success-600: #19a070;
+  --success-700: #137a56;
+  --success-800: #0d543b;
+  --success-900: #062a1e;
 
   --warning-50: #fefce8;
   --warning-100: #fdedd3;
@@ -90,6 +101,17 @@
   --default-700: #e4e4e7;
   --default-800: #f4f4f5;
   --default-900: #fafafa;
+
+  --success-50: #062a1e;
+  --success-100: #0d543b;
+  --success-200: #137a56;
+  --success-300: #19a070;
+  --success-400: #1fc18a;
+  --success-500: #3ddca6;
+  --success-600: #6adbac;
+  --success-700: #9ce7c8;
+  --success-800: #cdf3e3;
+  --success-900: #e9faf3;
 
   --warning-50: #312107;
   --warning-100: #62420e;
@@ -163,9 +185,4 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.ant-btn,
-.ant-input {
-  border-radius: 0.5rem;
 }

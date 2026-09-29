@@ -14,7 +14,8 @@
     "apply": "Apply",
     "local": "Local",
     "online": "Online",
-    "reset": "Reset"
+    "reset": "Reset",
+    "help": "Help"
   },
   "e": {
     "enabled": "Extension Enabled",
@@ -31,6 +32,40 @@
     "blacklist-in": "In Blacklist",
     "blacklist-click-in": "Click To Blacklist"
   },
+  "nav": {
+    "record": "Record",
+    "config": "Config",
+    "policies": "Sites",
+    "ip": "IP",
+    "more": "More"
+  },
+  "header": {
+    "github": "GitHub repository",
+    "new-version": "New version {{version}} available",
+    "current-version": "Current version {{version}}"
+  },
+  "power": {
+    "on": "Extension is on, click to turn off",
+    "off": "Extension is off, click to turn on"
+  },
+  "site": {
+    "protect": "Protect this site",
+    "status": {
+      "protected": "Protected",
+      "protected-parent": "Protected · via {{domain}}",
+      "excluded": "Excluded",
+      "excluded-parent": "Excluded · via {{domain}}",
+      "not-listed": "Not protected · not in inject list",
+      "paused": "Extension is off",
+      "unsupported": "This page is not supported"
+    },
+    "action": {
+      "exclude": "Turn off to add this site to the exclude list",
+      "include": "Turn on to remove this site from the exclude list",
+      "inject": "Turn on to add this site to the inject list",
+      "uninject": "Turn off to remove this site from the inject list"
+    }
+  },
   "label": {
     "config-file": "Config File",
     "config-import": "Import Config",
@@ -40,7 +75,8 @@
       "weak": "Weak Fingerprint",
       "script": "Script Config",
       "prefs": "Preferences",
-      "font": "Font Policy"
+      "font": "Font Policy",
+      "active": "{{count}} of {{total}} enabled"
     },
     "clipboard-export": "Export To Clipboard",
     "clipboard-import": "Import From Clipboard",
@@ -109,6 +145,14 @@
     "disabled": "Disabled",
     "webrtc": {
       "enabled": "Leak Protection (not affected by allow/block lists)"
+    },
+    "speech": {
+      "enabled": "Hide local Chinese voices",
+      "disabled": "Return empty list"
+    },
+    "battery": {
+      "enabled": "Spoof as plugged in",
+      "disabled": "Deny access"
     }
   },
   "item": {
@@ -131,17 +175,23 @@
       "webgpu": "WebGPU Fingerprint",
       "gpuInfo": "Graphics Driver",
       "domRect": "DOMRect Fingerprint",
+      "emoji": "Emoji Fingerprint",
       "serviceWorker": "Service Worker Interface",
       "e-language": "Language",
       "theme": "Theme",
       "log-level": "Log Level",
       "seed": "Global Seed",
       "fast-inject": "Fast Inject Mode",
+      "cloudflare": "Cloudflare Compatibility",
       "ip-module": {
         "enable": "Enable",
         "enable-languages": "Auto Configure Languages",
         "enable-timezone": "Auto Configure Timezone"
-      }
+      },
+      "canvasCjk": "Block Chinese Detection",
+      "speech": "Speech Voices",
+      "battery": "Battery Status",
+      "deviceMemory": "Device Memory"
     },
     "desc": {
       "clientHints": [
@@ -170,9 +220,15 @@
         "- Leak‑protection: Try to keep WebRTC working while hiding local or real IP addresses. If the browser cannot apply the policy, the extension will automatically switch to full disable. ***Note: If you choose this option, it will always take effect. Your allow or block list settings will not change it.***",
         "- Disable: Turn off WebRTC completely, making all related features unavailable."
       ],
-      "font": "Font fingerprinting reveals device details by checking which fonts are supported and how they’re rendered.",
+      "font": "Font fingerprinting reveals device details by checking which fonts are supported and how they’re rendered. When enabled, noise is added to element sizes (`offsetWidth`, `offsetHeight`) and Canvas text metrics (`measureText`).",
       "webgpu": "WebGPU fingerprinting extracts device information by analyzing differences in GPU processing capabilities.",
       "domRect": "DOMRect fingerprinting gathers device data by measuring variations in element positioning and dimensions.",
+      "emoji": [
+        "Emoji fingerprinting identifies the operating system and its version by drawing or measuring emoji.",
+        "- Canvas: adds tiny noise to emoji text metrics (`measureText`) and shifts emoji drawing by a sub-pixel offset",
+        "- DOM: adds tiny noise to the size of emoji elements (`getBoundingClientRect`, `getClientRects`)",
+        "The noise is invisible and stays consistent for the same text"
+      ],
       "serviceWorker": [
         "When disabled, websites are prevented from registering Service Workers, blocking them from using Service Workers to collect device information.",
         "When disabled, some websites may behave abnormally or fail to function properly."
@@ -192,7 +248,30 @@
         "- `Edge 120+` Enable Developer Mode",
         "**Firefox Enable Conditions**",
         "- `Firefox 136+` Authorization allowed"
-      ]
+      ],
+      "cloudflare": [
+        "When enabled, fingerprint spoofing is skipped on Cloudflare challenge pages and the Turnstile widget (`challenges.cloudflare.com`).",
+        "Verification is left to the browser and you; the extension stays out of the way, so a real person is not mistaken for a bot and stuck failing the challenge.",
+        "If disabled, challenge pages are spoofed too and verification may fail."
+      ],
+      "canvasCjk": [
+        "Stops websites from using Canvas to tell whether Chinese fonts are installed or the system is Chinese. Works independently of Canvas noise.",
+        "- Chinese characters that are drawn or measured render as missing-glyph boxes, like on a system without Chinese fonts",
+        "- Chinese font families (e.g. `Microsoft YaHei`, `PingFang SC`) are removed from `font`, while reading it still returns the value set by the page",
+        "- For font detection through the page DOM, use it together with **Font Policy**",
+        "***Note: Chinese text drawn in page canvases (some charts, maps, online editors) will show as boxes. Add such sites to the exclude list if needed.***"
+      ],
+      "speech": [
+        "The speech voice list (`speechSynthesis.getVoices`) reveals the operating system and installed language packs.",
+        "- Hide local Chinese voices: removes local voices from Chinese language packs (e.g. `Microsoft Huihui`) and keeps the browser’s online voices",
+        "- Return empty list: pages cannot get any voices"
+      ],
+      "battery": [
+        "Battery level and charging times (`navigator.getBattery`) can be used to link users across sites.",
+        "- Spoof as plugged in: always reports charging at 100%, like a desktop computer",
+        "- Deny access: calls fail with `NotAllowedError`"
+      ],
+      "deviceMemory": "Device memory (`navigator.deviceMemory`) in GB."
     },
     "status": {
       "webrtc": {

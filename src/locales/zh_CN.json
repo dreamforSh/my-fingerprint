@@ -14,7 +14,8 @@
     "apply": "应用",
     "local": "本地",
     "online": "在线",
-    "reset": "重置"
+    "reset": "重置",
+    "help": "说明"
   },
   "e": {
     "enabled": "扩展已开启",
@@ -31,6 +32,40 @@
     "iframe-record": "内嵌框架",
     "ip-module": "IP 模块"
   },
+  "nav": {
+    "record": "记录",
+    "config": "配置",
+    "policies": "网站",
+    "ip": "IP",
+    "more": "更多"
+  },
+  "header": {
+    "github": "GitHub 仓库",
+    "new-version": "发现新版本 {{version}}",
+    "current-version": "当前版本 {{version}}"
+  },
+  "power": {
+    "on": "扩展已开启，点击关闭",
+    "off": "扩展已关闭，点击开启"
+  },
+  "site": {
+    "protect": "防护此网站",
+    "status": {
+      "protected": "防护中",
+      "protected-parent": "防护中 · 随父域名 {{domain}}",
+      "excluded": "已排除",
+      "excluded-parent": "已排除 · 随父域名 {{domain}}",
+      "not-listed": "未防护 · 不在注入列表中",
+      "paused": "扩展已关闭",
+      "unsupported": "当前页面不支持"
+    },
+    "action": {
+      "exclude": "关闭后，此网站将加入排除列表",
+      "include": "开启后，此网站将移出排除列表",
+      "inject": "开启后，此网站将加入注入列表",
+      "uninject": "关闭后，此网站将移出注入列表"
+    }
+  },
   "label": {
     "config-file": "配置文件",
     "config-import": "导入配置",
@@ -40,7 +75,8 @@
       "weak": "弱指纹",
       "script": "脚本配置",
       "prefs": "个性化配置",
-      "font": "字体策略"
+      "font": "字体策略",
+      "active": "已开启 {{count}}/{{total}}"
     },
     "clipboard-export": "复制到剪贴板",
     "clipboard-import": "从剪贴板导入",
@@ -109,6 +145,14 @@
     "disabled": "禁用",
     "webrtc": {
       "enabled": "防泄露（不受黑白名单影响）"
+    },
+    "speech": {
+      "enabled": "隐藏中文本地语音",
+      "disabled": "返回空列表"
+    },
+    "battery": {
+      "enabled": "伪装为接通电源",
+      "disabled": "拒绝访问"
     }
   },
   "item": {
@@ -131,17 +175,23 @@
       "webgpu": "WebGPU指纹",
       "gpuInfo": "图形驱动信息",
       "domRect": "DOMRect指纹",
+      "emoji": "Emoji指纹",
       "serviceWorker": "Service Worker 接口",
       "e-language": "语言",
       "theme": "主题",
       "log-level": "日志等级",
       "seed": "全局种子",
       "fast-inject": "快速注入模式",
+      "cloudflare": "Cloudflare 兼容",
       "ip-module": {
         "enable": "开启",
         "enable-languages": "自动配置语言",
         "enable-timezone": "自动配置时区"
-      }
+      },
+      "canvasCjk": "阻止中文探测",
+      "speech": "语音合成列表",
+      "battery": "电池状态",
+      "deviceMemory": "设备内存"
     },
     "desc": {
       "clientHints": [
@@ -170,9 +220,15 @@
         "- 防泄露：尽量保留 WebRTC 功能，但屏蔽可能暴露本机或真实出口 IP 的候选地址。若浏览器不支持该策略，会自动回退为禁用模式。***注意: 选择此选项会始终有效，不会被白名单或黑名单设置所影响***",
         "- 禁用：彻底关闭 WebRTC，所有相关接口不可用。"
       ],
-      "font": "Fonts字体指纹，通过检测字体支持情况获取设备特征。",
+      "font": "Fonts字体指纹，通过检测字体支持情况获取设备特征。开启后为元素尺寸（`offsetWidth`、`offsetHeight`）与 Canvas 文本测量（`measureText`）加入噪音。",
       "webgpu": "WebGPU指纹，通过设备图形处理参数差异获取设备特征。",
       "domRect": "DOMRect指纹，通过测量元素位置和尺寸差异获取设备特征。",
+      "emoji": [
+        "Emoji 渲染指纹，通过绘制或测量表情符号识别操作系统及其版本。",
+        "- Canvas：为 Emoji 的文本测量（`measureText`）结果加入微小噪音，并对绘制位置做亚像素偏移",
+        "- DOM：为 Emoji 元素的尺寸（`getBoundingClientRect`、`getClientRects`）加入微小噪音",
+        "噪音不影响页面显示，同一文本的结果保持一致"
+      ],
       "serviceWorker": [
         "禁用后, 阻止网站注册 Service Worker, 防止网站通过 Service Worker 获取设备信息。",
         "禁用后, 可能会导致某些网站异常行为或无法正常工作。"
@@ -192,7 +248,30 @@
         "- `Edge 120+` 开启开发者模式",
         "**Firefox 开启条件**",
         "- `Firefox 136+` 允许授权"
-      ]
+      ],
+      "cloudflare": [
+        "开启后，在 Cloudflare 人机验证页与 Turnstile 组件（`challenges.cloudflare.com`）上跳过指纹改写。",
+        "验证由浏览器与你本人完成，扩展不参与，避免因指纹被改写而被误判为机器人、导致验证反复失败。",
+        "若关闭，验证页也会被改写指纹，可能无法通过验证。"
+      ],
+      "canvasCjk": [
+        "阻止网站通过 Canvas 判断系统是否安装中文字体、是否处于中文环境，可独立于 Canvas 噪音单独开启。",
+        "- 绘制和测量的中文字符按缺字方框处理，与未安装中文字体的系统表现一致",
+        "- 移除 `font` 中的中文字体（如 `微软雅黑`、`PingFang SC`），读取时仍返回网页设置的值",
+        "- 网页 DOM 中的字体探测请配合 **字体策略** 使用",
+        "***注意：开启后网页 Canvas 中的中文会显示为方框（如部分图表、地图、在线编辑器），可将对应网站加入排除列表***"
+      ],
+      "speech": [
+        "语音合成列表（`speechSynthesis.getVoices`）会暴露操作系统以及已安装的语言包。",
+        "- 隐藏中文本地语音：移除中文语言包提供的本地语音（如 `Microsoft Huihui`），保留浏览器自带的在线语音",
+        "- 返回空列表：网页无法获取任何语音"
+      ],
+      "battery": [
+        "电池状态（`navigator.getBattery`）的电量与充电时间可用于跨站关联用户。",
+        "- 伪装为接通电源：始终返回充电中、电量 100%，与台式机一致",
+        "- 拒绝访问：调用时返回 `NotAllowedError`"
+      ],
+      "deviceMemory": "设备内存（`navigator.deviceMemory`），单位 GB。"
     },
     "status": {
       "webrtc": {

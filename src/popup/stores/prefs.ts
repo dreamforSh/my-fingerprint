@@ -8,6 +8,7 @@ type Theme = LocalStorageConfig['prefs']['theme']
 type State = {
   theme: Theme
   language: string,
+  tab: string
 }
 
 type Actions = {
@@ -16,6 +17,8 @@ type Actions = {
 
   initLanguage: () => void
   setLanguage: (language: string) => void
+
+  setTab: (tab: string) => void
 }
 
 /**
@@ -52,7 +55,7 @@ export const usePrefsStore = create<State & Actions>()(
     const darkTheme: ThemeConfig = {
       cssVar: true,
       token: {
-        borderRadius: 4,
+        borderRadius: 6,
         wireframe: false,
         // colorBgBase: "#4a4a4a",
         colorPrimary: "#3ddca6",
@@ -64,7 +67,7 @@ export const usePrefsStore = create<State & Actions>()(
     const lightTheme: ThemeConfig = {
       cssVar: true,
       token: {
-        borderRadius: 4,
+        borderRadius: 6,
         wireframe: false,
         colorPrimary: "#1fc18a",
         colorInfo: "#1fc18a",
@@ -74,6 +77,7 @@ export const usePrefsStore = create<State & Actions>()(
     return {
       theme: 'system',
       language: getLanguage(navigator.language),
+      tab: 'record',
 
       getThemeName: (theme?: string) => {
         const t = theme ?? get().theme;
@@ -108,6 +112,10 @@ export const usePrefsStore = create<State & Actions>()(
         i18n.changeLanguage(lang)
         set({ language: lang })
       },
+
+      setTab: (tab: string) => {
+        set({ tab })
+      },
     }
   }, {
     version: 1,
@@ -116,6 +124,7 @@ export const usePrefsStore = create<State & Actions>()(
     partialize: (s) => ({
       theme: s.theme,
       language: s.language,
+      tab: s.tab,
     }) as any,
     onRehydrateStorage: () => (state) => {
       if (!state) return;

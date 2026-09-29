@@ -24,6 +24,25 @@ type SeedInfo = {
 
 type ContextOptions = Pick<FingerprintContext, 'info' | 'conf'> & Partial<FingerprintContext>
 
+const PROXY_TRAPS = [
+  'apply', 'construct', 'get', 'set', 'has', 'deleteProperty', 'defineProperty',
+  'getOwnPropertyDescriptor', 'ownKeys', 'getPrototypeOf', 'setPrototypeOf', 'isExtensible', 'preventExtensions',
+] as const
+
+/**
+ * 以已有代理作为目标执行处理器，处理器未定义的操作转发给已有代理
+ */
+const composeHandler = <T extends object>(handler: ProxyHandler<T>, inner: T): ProxyHandler<T> => {
+  const composed: Record<string, Function> = {}
+  for (const trap of PROXY_TRAPS) {
+    const fn = handler[trap] as Function | undefined
+    composed[trap] = fn ?
+      (_: T, ...rest: any[]) => fn.call(handler, inner, ...rest) :
+      (_: T, ...rest: any[]) => (Reflect[trap] as Function)(inner, ...rest)
+  }
+  return composed as ProxyHandler<T>
+}
+
 export class FingerprintContext {
   /** 不同上下文有不同的日志 */
   public logger = logManager.createLogger("FingerprintContext");
@@ -102,15 +121,24 @@ export class FingerprintContext {
    */
   public useRaw = <T>(target: T): T => {
     if (target == null) return target;
-    const raw = (target as any)[this.symbol.raw]
+    let raw = (target as any)[this.symbol.raw]
+    /* 多层代理时取最内层 */
+    while (raw != null && this.isReg(raw)) {
+      raw = raw[this.symbol.raw]
+    }
     return raw ?? target;
   }
 
   /**
    * 创建代理
+   * 目标已被代理时，以原始对象为目标创建新代理并依次执行处理器，页面只能看到一层代理
    */
   public newProxy = <T extends object>(target: T, handler: ProxyHandler<T>): T => {
     const RawProxy = this.useRaw(Proxy)
+    if (this.isReg(target)) {
+      handler = composeHandler(handler, target)
+      target = this.useRaw(target)
+    }
     const proxy = new RawProxy(target, this.toProxyHandler(handler));
     this.myProxy.add(proxy);
     return proxy;

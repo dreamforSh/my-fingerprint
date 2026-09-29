@@ -84,17 +84,21 @@ A lightweight, zero-disruption browser extension built on Manifest V3.
 
 ## 🧬 Fingerprint Protection <a id="fingerprint"></a>
 
-- Canvas fingerprint
+- Canvas fingerprint (with optional Chinese environment detection blocking)
 - Audio fingerprint
 - Fonts fingerprint
 - WebGL fingerprint
 - WebRTC protection
 - WebGPU fingerprint
 - DomRect fingerprint
+- Emoji fingerprint
+- Speech voices
 - Language and timezone
 - Graphics driver info
 - UserAgent series
 - Screen size and resolution
+- Device memory
+- Battery status
 
 ## 🧰 Installation <a id="installation"></a>
 
@@ -135,7 +139,8 @@ This module provides flexible options for customizing fingerprint protection beh
 
 - Script Settings
   - Global Seed: Used for the “Random by Global Seed” option to ensure consistent output  
-  - Injection Mode: Recommended to enable “Fast Injection” for better compatibility and performance
+  - Injection Mode: Recommended to enable “Fast Injection” for better compatibility and performance  
+  - Cloudflare Compatibility: Enabled by default; skips fingerprint spoofing on Cloudflare challenge pages and the Turnstile widget so a real person is not mistaken for a bot and stuck failing verification
 
 - Whitelist Management
   - Supports editing whitelist entries  

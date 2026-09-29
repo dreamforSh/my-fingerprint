@@ -108,6 +108,22 @@ export const ScriptConfigGroup = memo(() => {
       />
     </ConfigItemX>
 
+    <ConfigItemX
+      label={t('item.title.cloudflare')}
+      endContent={<TipIcon.Question content={<ConfigDesc desc={t('item.desc.cloudflare', { joinArrays: '\n\n' })} />} />}
+    >
+      <Switch
+        className="[&_.ant-switch-inner>span]:font-bold"
+        aria-label={t('item.title.cloudflare')}
+        checked={config.action.cloudflare?.enable ?? true}
+        onChange={(v) => {
+          if (!config.action.cloudflare) config.action.cloudflare = { enable: v }
+          else config.action.cloudflare.enable = v
+          saveConfig()
+        }}
+      />
+    </ConfigItemX>
+
   </div> : <Spin indicator={<LoadingOutlined spin />} />
 })
 

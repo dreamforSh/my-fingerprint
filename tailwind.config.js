@@ -20,6 +20,18 @@ export default {
         800: 'var(--default-800)',
         900: 'var(--default-900)',
       },
+      success: {
+        50: 'var(--success-50)',
+        100: 'var(--success-100)',
+        200: 'var(--success-200)',
+        300: 'var(--success-300)',
+        400: 'var(--success-400)',
+        500: 'var(--success-500)',
+        600: 'var(--success-600)',
+        700: 'var(--success-700)',
+        800: 'var(--success-800)',
+        900: 'var(--success-900)',
+      },
       warning: {
         50: 'var(--warning-50)',
         100: 'var(--warning-100)',

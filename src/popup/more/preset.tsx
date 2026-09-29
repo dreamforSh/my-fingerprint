@@ -166,7 +166,7 @@ const PresetInfoView = ({ mode, item, onApply }: {
   return isLoading ?
     <div className="h-full flex-center"><Spin indicator={<LoadingOutlined spin />} /></div> :
     preset == null ?
-      <div className="h-full flex-center">{'tip.data.unsupport'}</div> :
+      <div className="h-full flex-center">{t('tip.data.unsupport')}</div> :
       <div className="h-full flex flex-col gap-2 overflow-y-auto">
         <div>
           <Tag>{t('g.' + mode)}</Tag>

@@ -4,12 +4,15 @@ import { makeSeededRandom, seededRandom } from '@/utils/base';
 import {
   notify,
   drawNoiseTo2d,
+  hookTextMetrics,
   proxyUserAgentData,
   randomCanvasNoise,
   randomFontNoise, randomScreenSize
 } from './utils';
 import { longOffsetToMs, createLongOffsetFormatter } from '@/utils/timezone';
 import { base64ToUint8Array } from '@/utils/array';
+import { hasCjk, hasCjkFontFamily, isCjkLocalVoice, maskCjk, stripCjkFontFamilies } from './cjk';
+import { EMOJI_TEXT_MAX_LENGTH, isEmojiProbe } from './emoji';
 
 export const hookTasks: HookTask[] = [
   /**
@@ -198,6 +201,7 @@ export const hookTasks: HookTask[] = [
 
       useDisownKeys(gthis.navigator, [
         'userAgent', 'appVersion', 'platform', 'userAgentData' as any, 'language', 'languages', 'hardwareConcurrency',
+        'deviceMemory' as any,
       ]);
 
       const prototype = (gthis.Navigator ?? gthis.WorkerNavigator).prototype;
@@ -232,9 +236,9 @@ export const hookTasks: HookTask[] = [
 
       /* other */
       useGetterProxy([prototype, gthis.navigator], [
-        'languages', 'hardwareConcurrency',
+        'languages', 'hardwareConcurrency', 'deviceMemory' as keyof Navigator,
       ], (key, getter) => {
-        const value: any = useHookMode(fps[key] as any).value
+        const value: any = useHookMode(fps[key as keyof typeof fps] as any).value
         if (value == null) return;
         return {
           apply(target, thisArg: Navigator, args: any) {
@@ -275,8 +279,8 @@ export const hookTasks: HookTask[] = [
       const depth = useHookMode(fps.depth).value
       if (depth) {
         const tasks: { [key in keyof Screen]?: number } = {
-          'colorDepth': depth?.color,
-          'pixelDepth': depth?.pixel,
+          'colorDepth': depth.colorDepth ?? depth.color,
+          'pixelDepth': depth.pixelDepth ?? depth.pixel,
         }
         useGetterProxy([win.Screen.prototype, win.screen],
           Object.keys(tasks) as (keyof Screen)[],
@@ -331,13 +335,11 @@ export const hookTasks: HookTask[] = [
       const { win, conf, useSeed, useProxy } = ctx;
       if (!win) return;
 
-      /* getContext */
+      /* getContext: 提示浏览器优化频繁读取；不修改调用方传入的对象，避免产生页面可见的副作用 */
       useProxy(win.HTMLCanvasElement.prototype, 'getContext', {
         apply: (target, thisArg, args: Parameters<typeof HTMLCanvasElement.prototype.getContext>) => {
           if (args[0] === '2d') {
-            const option = args[1] ?? {};
-            option.willReadFrequently = true;
-            args[1] = option
+            args[1] = { willReadFrequently: true, ...(args[1] as any) }
           }
           return target.apply(thisArg, args);
         }
@@ -455,8 +457,8 @@ export const hookTasks: HookTask[] = [
 
       const handler = {
         apply: (target: Function, thisArg: OffscreenCanvas | HTMLCanvasElement, args: any) => {
-          /* 2d */
-          if (noiseCanvas) {
+          /* 2d：空画布（宽或高为 0）无像素可处理，跳过以保持与原生一致（否则 getImageData 会抛 IndexSizeError） */
+          if (noiseCanvas && thisArg.width > 0 && thisArg.height > 0) {
             const c2d = thisArg.getContext('2d');
             if (c2d) {
               notify('strong.canvas');
@@ -475,6 +477,84 @@ export const hookTasks: HookTask[] = [
 
       if (win) {
         useProxy(win.HTMLCanvasElement.prototype, ['toDataURL', 'toBlob'], handler);
+      }
+    },
+  },
+
+  /**
+   * Canvas CJK
+   * 阻止通过 Canvas 文本渲染与字体测量探测中文环境
+   */
+  {
+    condition: ({ conf }) => conf.fp.other.canvasCjk?.type === HookType.enabled,
+    onEnable: ({ gthis, win, useRaw, useProxy, useGetterProxy, useSetterProxy }) => {
+      /* 中文字符按缺字渲染 */
+      const textHandler = {
+        apply(target: any, thisArg: any, args: any[]) {
+          const text = args[0]
+          if (typeof text === 'string' && hasCjk(text)) {
+            notify('strong.canvasCjk')
+            args[0] = maskCjk(text)
+          }
+          return Reflect.apply(target, thisArg, args)
+        }
+      }
+
+      /* 实际生效的 font -> 页面设置的 font */
+      const shownFonts = new Map<string, string>()
+      /* 页面设置的 font -> 占位族名 */
+      const placeholders = new Map<string, string>()
+
+      for (const intf of [win?.CanvasRenderingContext2D, gthis.OffscreenCanvasRenderingContext2D]) {
+        if (!intf) continue;
+        const proto = intf.prototype
+
+        useProxy(proto, ['fillText', 'strokeText', 'measureText'], textHandler)
+
+        /* 移除中文字体族，读取时仍返回页面设置的值 */
+        const desc = Object.getOwnPropertyDescriptor(proto, 'font')
+        const rawGet = useRaw(desc?.get)
+        const rawSet = useRaw(desc?.set)
+        if (!rawGet || !rawSet) continue;
+
+        let chainGet: (() => string) | undefined
+
+        useGetterProxy(proto, 'font', (_, getter) => {
+          chainGet = getter
+          return {
+            apply(target, thisArg: any, args: any) {
+              const value = getter.call(thisArg)
+              return shownFonts.get(value) ?? value
+            }
+          }
+        })
+
+        useSetterProxy(proto, 'font', (_, setter) => ({
+          apply(target, thisArg: any, args: any) {
+            const value = args[0]
+            if (!chainGet || typeof value !== 'string' || !hasCjkFontFamily(value)) {
+              return setter.call(thisArg, value)
+            }
+            notify('strong.canvasCjk')
+
+            /* 由浏览器规范化原始值，非法值会被忽略 */
+            const before = rawGet.call(thisArg)
+            rawSet.call(thisArg, value)
+            const shown = rawGet.call(thisArg)
+            if (shown === before) return;
+
+            let placeholder = placeholders.get(shown)
+            if (!placeholder) {
+              placeholder = `"x-cjk-${placeholders.size + 1}"`
+              placeholders.set(shown, placeholder)
+            }
+            const stripped = stripCjkFontFamilies(shown, placeholder)
+            if (!stripped) return setter.call(thisArg, value);
+
+            setter.call(thisArg, stripped)
+            shownFonts.set(chainGet.call(thisArg), shown)
+          }
+        }))
       }
     },
   },
@@ -784,11 +864,19 @@ export const hookTasks: HookTask[] = [
    */
   {
     condition: ({ conf }) => conf.fp.other.font.type !== HookType.default,
-    onEnable: ({ win, conf, useSeed, useGetterProxy }) => {
-      if (!win) return;
+    onEnable: (ctx) => {
+      const { win, conf, useSeed, useGetterProxy } = ctx;
 
       const seed = useSeed(conf.fp.other.font)
       if (seed == null) return;
+
+      /* Canvas 文本测量 */
+      hookTextMetrics(ctx, 'strong.fonts',
+        (text, target) => `${target.font}\n${text}`,
+        (mark, key) => seededRandom(`${seed}:${key}:${mark}`, 1e-2, -1e-2),
+      )
+
+      if (!win) return;
 
       useGetterProxy(win.HTMLElement.prototype, [
         'offsetHeight', 'offsetWidth'
@@ -1079,6 +1167,182 @@ export const hookTasks: HookTask[] = [
         useProxy(win.Element.prototype, 'getClientRects', handler)
         useProxy(win.Range.prototype, 'getClientRects', handler)
       }
+    }
+  },
+
+  /**
+   * Emoji
+   * 表情符号渲染指纹：测量或绘制 Emoji 以识别系统及其版本
+   */
+  {
+    condition: ({ conf, isDefault }) => !isDefault(conf.fp.other.emoji),
+    onEnable: (ctx) => {
+      const { gthis, win, conf, useSeed, useProxy } = ctx;
+
+      const seed = useSeed(conf.fp.other.emoji)
+      if (seed == null) return;
+
+      /* 同一文本的噪音保持一致 */
+      const noiseOf = (mark: string, key: string) => seededRandom(`${seed}:${key}:${mark}`, 1e-2, -1e-2)
+
+      /* Canvas 文本测量 */
+      hookTextMetrics(ctx, 'strong.emoji',
+        (text, target) => isEmojiProbe(text) ? `${target.font}\n${text}` : undefined,
+        noiseOf,
+      )
+
+      /* Canvas 绘制：亚像素偏移，改变 Emoji 字形的抗锯齿结果 */
+      const jitter = (axis: string) => {
+        const v = seededRandom(`${seed}:${axis}`, 0.4, 0.15)
+        return seededRandom(`${seed}:${axis}:sign`) < 0.5 ? -v : v
+      }
+      const offsetX = jitter('x')
+      const offsetY = jitter('y')
+
+      for (const intf of [win?.CanvasRenderingContext2D, gthis.OffscreenCanvasRenderingContext2D]) {
+        if (!intf) continue;
+        useProxy(intf.prototype, ['fillText', 'strokeText'], {
+          apply(target: any, thisArg: any, args: any[]) {
+            if (args.length >= 3 && typeof args[0] === 'string' && isEmojiProbe(args[0])) {
+              notify('strong.emoji')
+              args[1] = Number(args[1]) + offsetX
+              args[2] = Number(args[2]) + offsetY
+            }
+            return Reflect.apply(target, thisArg, args)
+          }
+        })
+      }
+
+      if (!win) return;
+
+      /* DOM 尺寸：仅处理只含一个短文本节点的元素，避免读取大段文本 */
+      const textOfNode = (node?: Node | null): string | undefined => {
+        if (!node) return;
+        if (node.nodeType === Node.TEXT_NODE) {
+          const t = node as Text
+          if (t.length > EMOJI_TEXT_MAX_LENGTH) return;
+          return isEmojiProbe(t.data) ? t.data : undefined
+        }
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          const child = node.firstChild
+          if (!child || child !== node.lastChild || child.nodeType !== Node.TEXT_NODE) return;
+          return textOfNode(child)
+        }
+      }
+
+      const textOfRange = (range: Range): string | undefined => {
+        const node = range.startContainer
+        if (node !== range.endContainer) return;
+        const count = range.endOffset - range.startOffset
+        if (node.nodeType === Node.TEXT_NODE) {
+          if (count > EMOJI_TEXT_MAX_LENGTH) return;
+          const text = (node as Text).substringData(range.startOffset, count)
+          return isEmojiProbe(text) ? text : undefined
+        }
+        if (count === 1) return textOfNode(node.childNodes[range.startOffset])
+      }
+
+      /* 首个矩形与 getBoundingClientRect 使用相同噪音，保持一致 */
+      const noiseRect = (rect: DOMRect | undefined, mark: string) => {
+        if (!rect) return;
+        if (rect.width !== 0) rect.width += noiseOf(mark, 'width')
+        if (rect.height !== 0) rect.height += noiseOf(mark, 'height')
+      }
+
+      const rectHandler = <T>(textOf: (target: T) => string | undefined) => ({
+        apply(target: any, thisArg: T, args: any) {
+          const rect: DOMRect = Reflect.apply(target, thisArg, args)
+          const text = rect && textOf(thisArg)
+          if (text) {
+            notify('strong.emoji')
+            noiseRect(rect, text)
+          }
+          return rect
+        }
+      })
+
+      const rectListHandler = <T>(textOf: (target: T) => string | undefined) => ({
+        apply(target: any, thisArg: T, args: any) {
+          const list: DOMRectList = Reflect.apply(target, thisArg, args)
+          const text = list?.length ? textOf(thisArg) : undefined
+          if (text) {
+            notify('strong.emoji')
+            for (let i = 0; i < list.length; i++) {
+              noiseRect(list[i], i === 0 ? text : `${text}:${i}`)
+            }
+          }
+          return list
+        }
+      })
+
+      useProxy(win.Element.prototype, 'getBoundingClientRect', rectHandler<Element>(textOfNode))
+      useProxy(win.Element.prototype, 'getClientRects', rectListHandler<Element>(textOfNode))
+      useProxy(win.Range.prototype, 'getBoundingClientRect', rectHandler<Range>(textOfRange))
+      useProxy(win.Range.prototype, 'getClientRects', rectListHandler<Range>(textOfRange))
+    }
+  },
+
+  /**
+   * Speech Voices
+   * 语音合成列表
+   */
+  {
+    condition: ({ conf, isDefault }) => !isDefault(conf.fp.other.speech),
+    onEnable: ({ win, conf, useProxy }) => {
+      const proto = win?.SpeechSynthesis?.prototype
+      if (!proto) return;
+
+      const isDisabled = conf.fp.other.speech.type === HookType.disabled
+
+      useProxy(proto, 'getVoices', {
+        apply(target, thisArg: SpeechSynthesis, args: any) {
+          notify('strong.speech')
+          const voices: SpeechSynthesisVoice[] = Reflect.apply(target, thisArg, args)
+          return isDisabled ? voices.slice(0, 0) : voices.filter((v) => !isCjkLocalVoice(v))
+        }
+      })
+    }
+  },
+
+  /**
+   * Battery
+   * 电池状态
+   */
+  {
+    condition: ({ conf, isDefault }) => !isDefault(conf.fp.other.battery),
+    onEnable: ({ win, conf, useProxy, useGetterProxy }) => {
+      const navProto: any = win?.Navigator.prototype
+      if (!win || typeof navProto?.getBattery !== 'function') return;
+
+      /* 拒绝访问 */
+      if (conf.fp.other.battery.type === HookType.disabled) {
+        useProxy(navProto, 'getBattery', {
+          apply() {
+            notify('weak.battery')
+            return win.Promise.reject(new win.DOMException(
+              "Failed to execute 'getBattery' on 'Navigator': Access to the feature \"battery\" is disallowed by permissions policy.",
+              'NotAllowedError',
+            ))
+          }
+        })
+        return;
+      }
+
+      /* 伪装为接通电源的台式机 */
+      const proto = (win as any).BatteryManager?.prototype
+      if (!proto) return;
+      const values: Record<string, boolean | number> = {
+        charging: true,
+        chargingTime: 0,
+        dischargingTime: Infinity,
+        level: 1,
+      }
+      useGetterProxy(proto, Object.keys(values), (key: string) => ({
+        apply() {
+          notify('weak.battery')
+          return values[key]
+        }
+      }))
     }
   },
 

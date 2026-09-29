@@ -97,9 +97,9 @@ export const IpModulePanel = ({ }: {}) => {
     <hr className="my-2 text-default-200" />
 
     <div>
-      <div className="ms-1 mb-2 font-bold">配置</div>
+      <div className="ms-1 mb-2 font-bold">{t('e.config')}</div>
 
-      <div className="p-1 bg-[--ant-color-bg-container] rounded-lg">
+      <div className="px-3 bg-[--ant-color-bg-container] rounded-lg">
         <ConfigItemX
           label={t('item.title.ip-module.enable-languages')}
           endContent={<TipIcon.Question content={<ConfigDesc desc={t('item.desc.ip-module.enable-languages')} />} />}

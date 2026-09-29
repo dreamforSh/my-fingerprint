@@ -2,6 +2,7 @@ import { Popover, type PopoverProps } from "antd"
 import {
   QuestionOutlined,
 } from '@ant-design/icons';
+import { useTranslation } from "react-i18next";
 import { cn } from "@/utils/style";
 
 type Color = 'default' | 'warning' | 'danger'
@@ -17,24 +18,29 @@ export type TipIconProps = {
   color?: Color
   className?: string
   style?: React.CSSProperties
+  label?: string
   children?: React.ReactNode
 } & PopoverProps
 
-export const TipIcon = ({ isIconOnly, color = 'default', className, style, children, ...props }: TipIconProps) => {
-  return <Popover rootClassName="[&_.ant-popover-inner]:p-2" {...props}>
-    <div
+export const TipIcon = ({ isIconOnly, color = 'default', className, style, label, children, ...props }: TipIconProps) => {
+  return <Popover rootClassName="[&_.ant-popover-inner]:p-2" trigger={['hover', 'focus']} {...props}>
+    <button
+      type="button"
+      aria-label={label}
       className={cn(
-        'flex justify-center items-center rounded duration-300 text-default-600 hover:text-default-900 select-none',
-        isIconOnly && 'size-[22px]',
+        'shrink-0 flex justify-center items-center rounded border-0 p-0 cursor-help duration-200 text-default-600 hover:text-default-900 select-none',
+        'focus-visible:outline focus-visible:outline-2 focus-visible:outline-[--ant-color-primary]',
+        isIconOnly && 'size-[20px] text-[12px]',
         triggerColor[color],
         className
       )}
-      style={style}>{children}</div>
+      style={style}>{children}</button>
   </Popover>
 }
 
 TipIcon.Question = ({ content, ...props }: Omit<TipIconProps, 'icon'>) => {
-  return <TipIcon isIconOnly content={content} {...props} ><QuestionOutlined /></TipIcon>
+  const { t } = useTranslation()
+  return <TipIcon isIconOnly label={t('g.help')} content={content} {...props} ><QuestionOutlined /></TipIcon>
 }
 
 export default TipIcon

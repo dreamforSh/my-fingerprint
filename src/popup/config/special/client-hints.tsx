@@ -1,4 +1,3 @@
-import { selectStatusDotStyles as dotStyles } from "../styles"
 import { useTranslation } from "react-i18next"
 import { Button, Checkbox, Collapse, CollapseProps, Input, Select, Spin, Tooltip } from "antd"
 import { LoadingOutlined, RedoOutlined } from '@ant-design/icons'
@@ -70,6 +69,32 @@ const getUaData = async () => {
 const fetchClientHints = sharedAsync(LocalApi.clientHints)
 
 /**
+ * 当前 ClientHints 信息
+ */
+export const getCurrentClientHints = async (): Promise<ClientHintsInfo | undefined> => {
+  const data = await getUaData()
+  if (!data) return;
+  return {
+    ua: {
+      userAgent: navigator.userAgent,
+      appVersion: navigator.appVersion,
+      platform: navigator.platform,
+    },
+    uaData: {
+      arch: data.architecture,
+      bitness: data.bitness,
+      mobile: data.mobile,
+      model: data.model,
+      platform: data.platform,
+      platformVersion: data.platformVersion,
+      formFactors: data.formFactors,
+      uaFullVersion: data.uaFullVersion,
+      versions: data.fullVersionList,
+    }
+  }
+}
+
+/**
  * 配置模块
  */
 const ClientHintsConfigItem = ({ }: {}) => {
@@ -78,30 +103,10 @@ const ClientHintsConfigItem = ({ }: {}) => {
   const [localPreset, setLocalPreset] = useState<ClientHintsOption[]>([])
   const [uaInfo, setUaInfo] = useState<ClientHintsInfo>()
 
-  const { mode, value: modeValue = {}, setType, setValue } = useHookMode()
+  const { mode, value: modeValue = {}, setValue } = useHookMode()
 
   useEffect(() => {
-    getUaData().then(data => {
-      if (!data) return;
-      setUaInfo({
-        ua: {
-          userAgent: navigator.userAgent,
-          appVersion: navigator.appVersion,
-          platform: navigator.platform,
-        },
-        uaData: {
-          arch: data.architecture,
-          bitness: data.bitness,
-          mobile: data.mobile,
-          model: data.model,
-          platform: data.platform,
-          platformVersion: data.platformVersion,
-          formFactors: data.formFactors,
-          uaFullVersion: data.uaFullVersion,
-          versions: data.fullVersionList,
-        }
-      })
-    });
+    getCurrentClientHints().then(info => info && setUaInfo(info));
   }, [])
 
   useEffect(() => {
@@ -121,10 +126,6 @@ const ClientHintsConfigItem = ({ }: {}) => {
         title: 'special',
         options: [
           {
-            value: HookType.default,
-            label: t('type.' + HookType[HookType.default]),
-          },
-          {
             value: HookType.value,
             label: t('type.' + HookType[HookType.value]),
           },
@@ -142,9 +143,7 @@ const ClientHintsConfigItem = ({ }: {}) => {
   }, [i18n.language, localPreset])
 
   const onChange = (v: OptionType) => {
-    if (v === HookType.default) {
-      setType(HookType.default)
-    } else if (v === HookType.value) {
+    if (v === HookType.value) {
       setValue({ ...uaInfo })
     } else {
       const preset = localPreset?.find(item => item.key === v);
@@ -163,7 +162,6 @@ const ClientHintsConfigItem = ({ }: {}) => {
     <Select<OptionType>
       open={isOpen}
       onOpenChange={setIsOpen}
-      className={dotStyles.base}
       options={options}
       value={modeValue.key || mode.type}
       onChange={onChange}

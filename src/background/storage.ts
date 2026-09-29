@@ -7,6 +7,7 @@ import { logManager } from "@/utils/log";
 import { setWebRTCPolicy } from "./privacy";
 import { domainMergeDedup } from "@/utils/url";
 import { reIpInfoAlarm } from "./ip-info";
+import { reActionIcon } from "./icon";
 
 let mContent: LocalStorageContext | undefined
 
@@ -36,6 +37,7 @@ export const genDefaultLocalStorage = (): LocalStorage => {
           clientHints: { type: HookType.default },
           languages: { type: HookType.default },
           hardwareConcurrency: { type: HookType.default },
+          deviceMemory: { type: HookType.default },
         },
         screen: {
           size: { type: HookType.default },
@@ -47,13 +49,17 @@ export const genDefaultLocalStorage = (): LocalStorage => {
         other: {
           timezone: { type: HookType.default },
           canvas: { type: HookType.page },
+          canvasCjk: { type: HookType.default },
           audio: { type: HookType.default },
           webgl: { type: HookType.page },
           webrtc: { type: HookType.default },
           font: { type: HookType.default },
           webgpu: { type: HookType.default },
           domRect: { type: HookType.default },
+          emoji: { type: HookType.default },
           serviceWorker: { type: HookType.default },
+          speech: { type: HookType.default },
+          battery: { type: HookType.default },
         },
       },
       action: {
@@ -68,7 +74,10 @@ export const genDefaultLocalStorage = (): LocalStorage => {
           enable: false,
           allowlist: [],
           blocklist: [],
-        }
+        },
+        cloudflare: {
+          enable: true,
+        },
       },
       input: {
         globalSeed: String(sGlobal),
@@ -179,6 +188,8 @@ export const initLocalStorage = sharedAsync(async () => {
     reRequestHeader()
     applySubscribeStorage()
   })
+
+  reActionIcon(_storage.config.enable)
 
   onAfterInit(mContent)
 
@@ -360,4 +371,5 @@ const onUpdateContext = (_: LocalStorageContext, prev?: DeepPartial<LocalStorage
   reRegisterScript()
   reRequestHeader()
   reIpInfoAlarm(prev, next)
+  reActionIcon(next?.config?.enable !== false)
 }

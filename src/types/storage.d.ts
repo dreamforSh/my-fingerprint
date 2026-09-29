@@ -29,6 +29,9 @@ type LocalStorageConfig = {
       allowlist: string[]
       blocklist: string[]
     }
+    cloudflare: {
+      enable: boolean  // 在 Cloudflare 验证页/Turnstile 组件上跳过注入，避免误伤真人验证
+    }
   }
   // 输入
   input: {
@@ -64,6 +67,7 @@ type HookFingerprint = {
     clientHints: DefaultHookMode | ValueHookMode<ClientHintsInfo>
     languages: DefaultHookMode | RandomHookMode | ValueHookMode<string[]>
     hardwareConcurrency: DefaultHookMode | RandomHookMode | ValueHookMode<number>
+    deviceMemory: DefaultHookMode | ValueHookMode<number>
   }
   screen: {
     size: DefaultHookMode | RandomHookMode | ValueHookMode<ScreenSize>
@@ -75,13 +79,17 @@ type HookFingerprint = {
   other: {
     timezone: DefaultHookMode | ValueHookMode<TimeZoneInfo>
     canvas: DefaultHookMode | RandomHookMode
+    canvasCjk: DefaultHookMode | EnableHookMode  // 阻止通过 Canvas 探测中文环境
     audio: DefaultHookMode | RandomHookMode
     webgl: DefaultHookMode | RandomHookMode
     webrtc: DefaultHookMode | EnableHookMode | DisableHookMode
     font: DefaultHookMode | RandomHookMode
     webgpu: DefaultHookMode | RandomHookMode
     domRect: DefaultHookMode | RandomHookMode
+    emoji: DefaultHookMode | RandomHookMode
     serviceWorker: DefaultHookMode | DisableHookMode
+    speech: DefaultHookMode | EnableHookMode | DisableHookMode  // enabled: 隐藏中文本地语音, disabled: 空列表
+    battery: DefaultHookMode | EnableHookMode | DisableHookMode  // enabled: 伪装为接通电源, disabled: 拒绝访问
   }
 }
 

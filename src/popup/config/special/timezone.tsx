@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { HookType } from '@/types/enum'
 import { Form, Input, Select } from "antd"
-import { selectStatusDotStyles as dotStyles } from "../styles"
 import { sharedAsync } from "@/utils/timer"
 import { LocalApi, type TimeZoneOption } from "@/api/local"
 import { useI18n } from "@/utils/hooks"
@@ -38,6 +37,17 @@ const validateTimeZone = (zone: string) => {
 
 const fetchTimezones = sharedAsync(LocalApi.timezone)
 
+/**
+ * 当前系统时区
+ */
+export const getCurrentTimeZone = (): TimeZoneInfo => {
+  const opts = Intl.DateTimeFormat().resolvedOptions();
+  return {
+    zone: opts.timeZone,
+    locales: [opts.locale],
+  }
+}
+
 const TimeZoneConfigItem = ({ }: {}) => {
   const { t, i18n, asLang } = useI18n()
   const [isOpen, setIsOpen] = useState(false)
@@ -45,15 +55,9 @@ const TimeZoneConfigItem = ({ }: {}) => {
   const [isZoneInvalid, setIsZoneInvalid] = useState(false)
   const [isLocalesInvalid, setIsLocalesInvalid] = useState(false)
 
-  const { mode, value: modeValue = {}, version, setType, setValue } = useHookMode()
+  const { mode, value: modeValue = {}, version, setValue } = useHookMode()
 
-  const currentTz = useMemo<TimeZoneInfo>(() => {
-    const opts = Intl.DateTimeFormat().resolvedOptions();
-    return {
-      zone: opts.timeZone,
-      locales: [opts.locale],
-    }
-  }, [])
+  const currentTz = useMemo(getCurrentTimeZone, [])
 
   const defaultLocales = currentTz.locales.join(', ');
 
@@ -82,10 +86,6 @@ const TimeZoneConfigItem = ({ }: {}) => {
         title: 'special',
         options: [
           {
-            value: HookType.default,
-            label: t('type.' + HookType[HookType.default]),
-          },
-          {
             value: HookType.value,
             label: t('type.' + HookType[HookType.value]),
           },
@@ -113,9 +113,7 @@ const TimeZoneConfigItem = ({ }: {}) => {
   }, [i18n.language, localPreset])
 
   const onChange = (v: OptionType) => {
-    if (v === HookType.default) {
-      setType(HookType.default)
-    } else if (v === HookType.value) {
+    if (v === HookType.value) {
       setValue({ ...currentTz })
     } else {
       const preset = localPreset?.find(item => item.key === v);
@@ -132,7 +130,6 @@ const TimeZoneConfigItem = ({ }: {}) => {
     <Select<OptionType>
       open={isOpen}
       onOpenChange={setIsOpen}
-      className={dotStyles.base}
       options={options}
       value={currentOption}
       onChange={onChange}

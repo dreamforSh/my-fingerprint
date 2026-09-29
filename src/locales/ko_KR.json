@@ -14,7 +14,8 @@
     "apply": "적용",
     "local": "로컬",
     "online": "온라인",
-    "reset": "초기화"
+    "reset": "초기화",
+    "help": "도움말"
   },
   "e": {
     "enabled": "확장 프로그램 활성화됨",
@@ -31,6 +32,40 @@
     "blacklist-in": "블랙리스트에 있음",
     "blacklist-click-in": "클릭하여 블랙리스트에 추가"
   },
+  "nav": {
+    "record": "기록",
+    "config": "설정",
+    "policies": "사이트",
+    "ip": "IP",
+    "more": "더 보기"
+  },
+  "header": {
+    "github": "GitHub 저장소",
+    "new-version": "새 버전 {{version}} 사용 가능",
+    "current-version": "현재 버전 {{version}}"
+  },
+  "power": {
+    "on": "확장 프로그램 켜짐, 클릭하여 끄기",
+    "off": "확장 프로그램 꺼짐, 클릭하여 켜기"
+  },
+  "site": {
+    "protect": "이 사이트 보호",
+    "status": {
+      "protected": "보호 중",
+      "protected-parent": "보호 중 · {{domain}} 경유",
+      "excluded": "제외됨",
+      "excluded-parent": "제외됨 · {{domain}} 경유",
+      "not-listed": "보호 안 됨 · 주입 목록에 없음",
+      "paused": "확장 프로그램이 꺼져 있음",
+      "unsupported": "지원되지 않는 페이지"
+    },
+    "action": {
+      "exclude": "끄면 이 사이트가 제외 목록에 추가됩니다",
+      "include": "켜면 이 사이트가 제외 목록에서 제거됩니다",
+      "inject": "켜면 이 사이트가 주입 목록에 추가됩니다",
+      "uninject": "끄면 이 사이트가 주입 목록에서 제거됩니다"
+    }
+  },
   "label": {
     "config-file": "설정 파일",
     "config-import": "설정 가져오기",
@@ -40,7 +75,8 @@
       "weak": "약한 핑거프린트",
       "script": "스크립트 설정",
       "prefs": "환경설정",
-      "font": "폰트 정책"
+      "font": "폰트 정책",
+      "active": "{{count}}/{{total}} 활성화됨"
     },
     "clipboard-export": "클립보드로 내보내기",
     "clipboard-import": "클립보드에서 가져오기",
@@ -109,6 +145,14 @@
     "disabled": "비활성화됨",
     "webrtc": {
       "enabled": "유출 방지 (허용/차단 목록의 영향을 받지 않음)"
+    },
+    "speech": {
+      "enabled": "중국어 로컬 음성 숨기기",
+      "disabled": "빈 목록 반환"
+    },
+    "battery": {
+      "enabled": "전원 연결로 위장",
+      "disabled": "접근 거부"
     }
   },
   "item": {
@@ -131,17 +175,23 @@
       "webgpu": "WebGPU 핑거프린트",
       "gpuInfo": "그래픽 드라이버",
       "domRect": "DOMRect 핑거프린트",
+      "emoji": "Emoji 핑거프린트",
       "serviceWorker": "Service Worker 인터페이스",
       "e-language": "언어",
       "theme": "테마",
       "log-level": "로그 레벨",
       "seed": "전역 시드",
       "fast-inject": "빠른 주입 모드",
+      "cloudflare": "Cloudflare 호환",
       "ip-module": {
         "enable": "활성화",
         "enable-languages": "언어 자동 구성",
         "enable-timezone": "시간대 자동 구성"
-      }
+      },
+      "canvasCjk": "중국어 환경 탐지 차단",
+      "speech": "음성 합성 목록",
+      "battery": "배터리 상태",
+      "deviceMemory": "기기 메모리"
     },
     "desc": {
       "clientHints": [
@@ -170,9 +220,15 @@
         "- 유출 방지: WebRTC 기능은 유지하면서 로컬 또는 실제 IP 주소가 노출되는 것을 숨기려고 시도합니다. 브라우저가 이 정책을 적용할 수 없는 경우, 확장 프로그램이 자동으로 완전 비활성화로 전환됩니다. ***주의: 이 옵션을 선택하면 항상 적용되며, 허용/차단 목록 설정으로도 바뀌지 않습니다.***",
         "- 비활성화: WebRTC를 완전히 꺼서 관련 기능을 모두 사용할 수 없게 합니다."
       ],
-      "font": "Font 핑거프린팅은 지원되는 글꼴과 렌더링 방식을 확인하여 기기 정보를 드러냅니다.",
+      "font": "Fonts 핑거프린팅은 지원되는 폰트와 렌더링 방식을 확인하여 기기 정보를 드러냅니다. 켜면 요소 크기(`offsetWidth`, `offsetHeight`)와 Canvas 텍스트 측정(`measureText`)에 노이즈를 추가합니다.",
       "webgpu": "WebGPU 핑거프린팅은 GPU 처리 성능의 차이를 분석하여 기기 정보를 추출합니다.",
       "domRect": "DOMRect 핑거프린팅은 요소 위치와 크기의 차이를 측정하여 기기 데이터를 수집합니다.",
+      "emoji": [
+        "Emoji 렌더링 핑거프린팅은 이모지를 그리거나 측정하여 운영체제와 버전을 식별합니다.",
+        "- Canvas: 이모지 텍스트 측정(`measureText`) 결과에 미세한 노이즈를 추가하고 그리기 위치를 서브픽셀만큼 이동합니다",
+        "- DOM: 이모지 요소의 크기(`getBoundingClientRect`, `getClientRects`)에 미세한 노이즈를 추가합니다",
+        "노이즈는 화면에 보이지 않으며 같은 텍스트에 대해 일관되게 유지됩니다"
+      ],
       "serviceWorker": [
         "비활성화하면 웹사이트가 Service Worker를 등록하지 못하도록 막아, Service Worker를 통한 기기 정보 수집을 차단합니다.",
         "비활성화하면 일부 웹사이트가 비정상적으로 동작하거나 제대로 작동하지 않을 수 있습니다."
@@ -192,7 +248,30 @@
         "- `Edge 120+` 개발자 모드를 켜세요",
         "**Firefox 활성화 조건**",
         "- `Firefox 136+` 권한 허용이 필요합니다"
-      ]
+      ],
+      "cloudflare": [
+        "켜면 Cloudflare 인증 페이지와 Turnstile 위젯(`challenges.cloudflare.com`)에서 핑거프린트 변조를 건너뜁니다.",
+        "인증은 브라우저와 사용자 본인이 수행하며, 확장 프로그램은 관여하지 않습니다. 실제 사용자가 봇으로 오인되어 인증에 계속 실패하는 것을 방지합니다.",
+        "끄면 인증 페이지도 변조되어 인증에 실패할 수 있습니다."
+      ],
+      "canvasCjk": [
+        "웹사이트가 Canvas로 중국어 폰트 설치 여부나 중국어 환경을 판별하지 못하도록 차단합니다. Canvas 노이즈와 별도로 켤 수 있습니다.",
+        "- 그리거나 측정하는 중국어 문자는 중국어 폰트가 없는 시스템처럼 빈 상자로 처리됩니다",
+        "- `font`에서 중국어 폰트(예: `Microsoft YaHei`, `PingFang SC`)를 제거하며, 읽을 때는 페이지가 설정한 값을 그대로 반환합니다",
+        "- 페이지 DOM을 통한 폰트 탐지는 **폰트 정책**과 함께 사용하세요",
+        "***주의: 켜면 페이지 Canvas의 중국어가 상자로 표시됩니다(일부 차트, 지도, 온라인 편집기). 필요하면 해당 사이트를 제외 목록에 추가하세요.***"
+      ],
+      "speech": [
+        "음성 합성 목록(`speechSynthesis.getVoices`)은 운영체제와 설치된 언어 팩을 드러냅니다.",
+        "- 중국어 로컬 음성 숨기기: 중국어 언어 팩의 로컬 음성(예: `Microsoft Huihui`)을 제거하고 브라우저의 온라인 음성은 유지합니다",
+        "- 빈 목록 반환: 페이지에서 음성을 가져올 수 없습니다"
+      ],
+      "battery": [
+        "배터리 잔량과 충전 시간(`navigator.getBattery`)은 사이트 간 사용자 연결에 사용될 수 있습니다.",
+        "- 전원 연결로 위장: 데스크톱처럼 항상 충전 중, 100%로 보고합니다",
+        "- 접근 거부: 호출 시 `NotAllowedError`로 실패합니다"
+      ],
+      "deviceMemory": "기기 메모리(`navigator.deviceMemory`), 단위 GB."
     },
     "status": {
       "webrtc": {

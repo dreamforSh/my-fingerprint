@@ -52,7 +52,11 @@ type ScreenSize = {
 }
 
 type ScreenDepth = {
+  colorDepth?: number
+  pixelDepth?: number
+  /** @deprecated 旧字段 */
   color?: number
+  /** @deprecated 旧字段 */
   pixel?: number
 }
 

@@ -130,6 +130,8 @@ export const drawNoiseTo2d = (
   sx: number, sy: number, sw: number, sh: number, settings?: ImageDataSettings
 ) => {
   const imageData = useRaw(target.getImageData).call(target, sx, sy, sw, sh, settings)
+  /* 空区域无像素可处理，直接返回原始结果（避免后续逻辑与越界访问） */
+  if (imageData.width <= 0 || imageData.height <= 0) return imageData;
 
   let noiseIndex = 0;
   let isChanged = false
@@ -172,6 +174,60 @@ export const drawNoiseTo2d = (
   }
 
   return imageData
+}
+
+type Canvas2d = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
+
+const TEXT_METRICS_KEYS: (keyof TextMetrics)[] = [
+  'width',
+  'actualBoundingBoxLeft',
+  'actualBoundingBoxRight',
+  'actualBoundingBoxAscent',
+  'actualBoundingBoxDescent',
+]
+
+/**
+ * 为 measureText 返回的 TextMetrics 添加噪音
+ * @param pick 返回噪音标识（相同标识的噪音保持一致），为空则不处理
+ * @param noise 根据噪音标识与属性名计算噪音
+ */
+export const hookTextMetrics = (
+  { gthis, win, useProxy, useGetterProxy }: FingerprintContext,
+  notifyKey: string,
+  pick: (text: string, target: Canvas2d) => string | undefined,
+  noise: (mark: string, key: string) => number,
+) => {
+  const proto = gthis.TextMetrics?.prototype
+  if (!proto) return;
+
+  const marks = new WeakMap<TextMetrics, string>()
+
+  for (const intf of [win?.CanvasRenderingContext2D, gthis.OffscreenCanvasRenderingContext2D]) {
+    if (!intf) continue;
+    useProxy(intf.prototype, 'measureText', {
+      apply(target, thisArg: Canvas2d, args: any) {
+        const metrics: TextMetrics = Reflect.apply(target, thisArg, args)
+        const text = args[0]
+        if (metrics && typeof text === 'string') {
+          const mark = pick(text, thisArg)
+          if (mark != null) {
+            notify(notifyKey)
+            marks.set(metrics, mark)
+          }
+        }
+        return metrics
+      }
+    })
+  }
+
+  useGetterProxy(proto, TEXT_METRICS_KEYS, (key, getter) => ({
+    apply(target, thisArg: TextMetrics, args: any) {
+      const value = getter.call(thisArg)
+      const mark = marks.get(thisArg)
+      if (mark == null || typeof value !== 'number' || value === 0) return value;
+      return value + noise(mark, key)
+    }
+  }))
 }
 
 /**

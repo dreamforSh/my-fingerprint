@@ -3,6 +3,7 @@ import { genRandomSeed, existParentDomain } from "@/utils/base";
 import { getBrowser } from "@/utils/equipment";
 import { sendToWindow } from "@/utils/message";
 import { logManager } from '@/utils/log';
+import { isCloudflareChallengeHost } from "./cloudflare";
 
 const logger = logManager.createLogger(__LOG_PREFIX_FILE_PATH__);
 
@@ -29,6 +30,21 @@ const args = _args;
     // @ts-ignore
     if (!args.fun && typeof coreInject === 'function') args.fun = coreInject;
     if (!window || !storage) return;
+
+    /**
+     * Cloudflare 验证兼容：验证组件（Turnstile / Challenge）会检测环境是否被篡改。
+     * 这类组件始终运行在 `challenges.cloudflare.com` 的独立 iframe 中，因此在该上下文中
+     * 完全不介入（不设置全局标记、不注入钩子、不监听消息），把验证交还给浏览器与真人，
+     * 同时不影响承载页面本身的指纹防护。
+     */
+    if (storage.config.action.cloudflare?.enable !== false) {
+      let selfHost: string | undefined
+      try { selfHost = window.location.hostname } catch (_) { }
+      if (isCloudflareChallengeHost(selfHost)) {
+        logger.debug('skip cloudflare challenge context:', selfHost);
+        return;
+      }
+    }
 
     const hook = (win: Window & typeof globalThis, data: WindowStorage | undefined) => {
       if (!data) return;

@@ -1,12 +1,23 @@
-export const selectStatusDotStyles = {
-  base: "after:block after:absolute after:left-1 after:top-1/2 after:translate-y-[-50%] after:h-2 after:w-1 [&_.ant-select-selection-item]:ml-2 after:rounded-sm after:duration-300 after:bg-[--ant-color-fill-content] hover:after:bg-[--ant-color-fill-content-hover]",
-  success: "[&_.ant-select]:after:bg-[--ant-color-success-border-hover] [&_.ant-select]:hover:after:bg-[--ant-color-success-text-hover]",
-  error: "[&_.ant-select]:after:bg-[--ant-color-error-border-hover] [&_.ant-select]:hover:after:bg-[--ant-color-error-text-hover]",
-  warning: "[&_.ant-select]:after:bg-[--ant-color-warning-border-hover] [&_.ant-select]:hover:after:bg-[--ant-color-warning-text-hover]",
+/**
+ * 配置项状态点颜色
+ */
+export const statusDotColors = {
+  default: "bg-[--ant-color-fill]",
+  success: "bg-[--ant-color-success]",
+  warning: "bg-[--ant-color-warning]",
+  error: "bg-[--ant-color-error]",
 }
 
 export const tagColors = {
   unstable: 'orange',
   deprecated: 'red',
   'unsupport-import': 'cyan',
+}
+
+/**
+ * 行内标签样式（小字号，保证对比度）
+ */
+export const tagChipStyles: Record<string, string> = {
+  unstable: 'bg-warning-50 text-warning-700',
+  deprecated: 'bg-danger-50 text-danger-700',
 }
