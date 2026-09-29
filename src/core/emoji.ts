@@ -5,8 +5,10 @@
 
 /**
  * 表情符号：图形符号、区域指示符（国旗）、键帽组合符
+ * 用字符串构造：WebStorm 的正则解析器不认识 \p{Extended_Pictographic}，写成字面量会误报“未知字符类别”
  */
-const EMOJI_TEST = /\p{Extended_Pictographic}|\p{Regional_Indicator}|⃣/u
+const EMOJI_PATTERN = '\\p{Extended_Pictographic}|\\p{Regional_Indicator}|\\u20E3'
+const EMOJI_TEST = new RegExp(EMOJI_PATTERN, 'u')
 
 /**
  * 文本长度上限，超出时不视为 Emoji 探测文本
