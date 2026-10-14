@@ -13,6 +13,7 @@ import { longOffsetToMs, createLongOffsetFormatter } from '@/utils/timezone';
 import { base64ToUint8Array } from '@/utils/array';
 import { hasCjk, hasCjkFontFamily, isCjkLocalVoice, maskCjk, stripCjkFontFamilies } from './cjk';
 import { EMOJI_TEXT_MAX_LENGTH, isEmojiProbe } from './emoji';
+import { isCloudflareCaller } from './cloudflare';
 
 export const hookTasks: HookTask[] = [
   /**
@@ -217,6 +218,9 @@ export const hookTasks: HookTask[] = [
             if (value == null) return;
             return {
               apply(target, thisArg: Navigator, args: any) {
+                if (isCloudflareCaller()) {
+                  return getter.call(thisArg);
+                }
                 notify('weak.' + key)
                 return value;
               }
@@ -226,6 +230,9 @@ export const hookTasks: HookTask[] = [
         if (uaInfo.uaData != null) {
           useGetterProxy([prototype, gthis.navigator], ('userAgentData' as any), (_, getter) => ({
             apply(target, thisArg: Navigator, args: any) {
+              if (isCloudflareCaller()) {
+                return getter.call(thisArg);
+              }
               notify('weak.userAgentData')
               const result = getter.call(thisArg)
               return proxyUserAgentData(ctx, result, uaInfo);
@@ -242,6 +249,9 @@ export const hookTasks: HookTask[] = [
         if (value == null) return;
         return {
           apply(target, thisArg: Navigator, args: any) {
+            if (isCloudflareCaller()) {
+              return getter.call(thisArg);
+            }
             notify('weak.' + key)
             return value;
           }
@@ -250,12 +260,15 @@ export const hookTasks: HookTask[] = [
 
       {
         const value = useHookMode(fps.languages).value?.[0]
-        value != null && useGetterProxy([prototype, gthis.navigator], 'language', {
+        value != null && useGetterProxy([prototype, gthis.navigator], 'language', (_, getter) => ({
           apply(target, thisArg: Navigator, args: any) {
+            if (isCloudflareCaller()) {
+              return getter.call(thisArg);
+            }
             notify('weak.languages')
             return value;
           }
-        })
+        }))
       }
     },
   },
@@ -289,6 +302,9 @@ export const hookTasks: HookTask[] = [
             if (num == null) return;
             return {
               apply(target, thisArg: Screen, args: any) {
+                if (isCloudflareCaller()) {
+                  return getter.call(thisArg);
+                }
                 notify('weak.' + key)
                 return num;
               }
@@ -315,6 +331,9 @@ export const hookTasks: HookTask[] = [
             if (num == null) return;
             return {
               apply(target, thisArg: Screen, args: any) {
+                if (isCloudflareCaller()) {
+                  return getter.call(thisArg);
+                }
                 notify('weak.' + key)
                 return num;
               }
@@ -379,6 +398,9 @@ export const hookTasks: HookTask[] = [
 
         const handler = {
           apply: (target: any, thisArg: WebGLRenderingContext | WebGL2RenderingContext, args: any) => {
+            if (isCloudflareCaller()) {
+              return target.apply(thisArg, args);
+            }
             notify('strong.webgl')
 
             const source = args[1]
@@ -419,6 +441,9 @@ export const hookTasks: HookTask[] = [
       if (info) {
         const handler = {
           apply: (target: any, thisArg: WebGLRenderingContext, args: any) => {
+            if (isCloudflareCaller()) {
+              return target.apply(thisArg, args);
+            }
             if (!ex) ex = thisArg.getExtension('WEBGL_debug_renderer_info');
             if (ex) {
               if (args[0] === ex.UNMASKED_VENDOR_WEBGL) {
@@ -457,6 +482,9 @@ export const hookTasks: HookTask[] = [
 
       const handler = {
         apply: (target: Function, thisArg: OffscreenCanvas | HTMLCanvasElement, args: any) => {
+          if (isCloudflareCaller()) {
+            return Reflect.apply(target, thisArg, args);
+          }
           /* 2d：空画布（宽或高为 0）无像素可处理，跳过以保持与原生一致（否则 getImageData 会抛 IndexSizeError） */
           if (noiseCanvas && thisArg.width > 0 && thisArg.height > 0) {
             const c2d = thisArg.getContext('2d');
@@ -491,6 +519,9 @@ export const hookTasks: HookTask[] = [
       /* 中文字符按缺字渲染 */
       const textHandler = {
         apply(target: any, thisArg: any, args: any[]) {
+          if (isCloudflareCaller()) {
+            return Reflect.apply(target, thisArg, args)
+          }
           const text = args[0]
           if (typeof text === 'string' && hasCjk(text)) {
             notify('strong.canvasCjk')
@@ -523,6 +554,9 @@ export const hookTasks: HookTask[] = [
           chainGet = getter
           return {
             apply(target, thisArg: any, args: any) {
+              if (isCloudflareCaller()) {
+                return getter.call(thisArg);
+              }
               const value = getter.call(thisArg)
               return shownFonts.get(value) ?? value
             }
@@ -531,6 +565,9 @@ export const hookTasks: HookTask[] = [
 
         useSetterProxy(proto, 'font', (_, setter) => ({
           apply(target, thisArg: any, args: any) {
+            if (isCloudflareCaller()) {
+              return setter.call(thisArg, args[0]);
+            }
             const value = args[0]
             if (!chainGet || typeof value !== 'string' || !hasCjkFontFamily(value)) {
               return setter.call(thisArg, value)
@@ -575,6 +612,9 @@ export const hookTasks: HookTask[] = [
 
       useProxy(win.AudioBuffer.prototype, 'getChannelData', {
         apply: (target, thisArg: AudioBuffer, args: Parameters<typeof AudioBuffer.prototype.getChannelData>) => {
+          if (isCloudflareCaller()) {
+            return target.apply(thisArg, args);
+          }
           notify('strong.audio')
           const data = target.apply(thisArg, args)
           if (mem.has(data)) return data;
@@ -596,6 +636,9 @@ export const hookTasks: HookTask[] = [
         'copyFromChannel', 'copyToChannel',
       ], {
         apply: (target, thisArg: AudioBuffer, args: any) => {
+          if (isCloudflareCaller()) {
+            return target.apply(thisArg, args);
+          }
           const channel = args[1]
           if (channel != null) {
             thisArg.getChannelData(channel)
@@ -607,6 +650,9 @@ export const hookTasks: HookTask[] = [
       const dcNoise = seededRandom(seed) * 1e-7;
       useGetterProxy(win.DynamicsCompressorNode.prototype, 'reduction', (_, getter) => ({
         apply(target, thisArg, args: any) {
+          if (isCloudflareCaller()) {
+            return getter.call(thisArg);
+          }
           notify('strong.audio')
           const res = getter.call(thisArg);
           return (typeof res === 'number' && res !== 0) ? res + dcNoise : res;
@@ -882,6 +928,9 @@ export const hookTasks: HookTask[] = [
         'offsetHeight', 'offsetWidth'
       ], (key, getter) => ({
         apply(target: () => any, thisArg: HTMLElement, args: any) {
+          if (isCloudflareCaller()) {
+            return getter.call(thisArg);
+          }
           notify('strong.fonts')
           const result = getter.call(thisArg);
           const mark = (thisArg.style?.fontFamily ?? key) + result;
@@ -1031,6 +1080,7 @@ export const hookTasks: HookTask[] = [
       /* GPUAdapter & GPUDevice */
       {
         const makeNoise = (raw: any, offset: number) => {
+          if (isCloudflareCaller()) return raw;
           notify('strong.webgpu')
           const rn = seededRandom(seed + (offset * 7), 64, 1)
           return raw ? raw - Math.floor(rn) : raw;
@@ -1040,6 +1090,9 @@ export const hookTasks: HookTask[] = [
           const getter = desc.get
           return getter && {
             get() {
+              if (isCloudflareCaller()) {
+                return getter.call(this);
+              }
               const limits = getter.call(this);
               return newProxy(limits, {
                 get(target, prop) {
@@ -1067,6 +1120,9 @@ export const hookTasks: HookTask[] = [
         // @ts-ignore
         useProxy(win.GPUCommandEncoder.prototype, 'beginRenderPass', {
           apply(target, self, args) {
+            if (isCloudflareCaller()) {
+              return Reflect.apply(target, self, args);
+            }
             notify('strong.webgpu')
             if (args?.[0]?.colorAttachments?.[0]?.clearValue) {
               try {
@@ -1092,6 +1148,9 @@ export const hookTasks: HookTask[] = [
         // @ts-ignore
         useProxy(win.GPUQueue.prototype, 'writeBuffer', {
           apply(target, self, args) {
+            if (isCloudflareCaller()) {
+              return Reflect.apply(target, self, args);
+            }
             notify('strong.webgpu')
             const _data = args?.[2]
             if (_data && _data instanceof Float32Array) {
@@ -1136,6 +1195,9 @@ export const hookTasks: HookTask[] = [
       {
         const handler = {
           apply(target: () => DOMRect, thisArg: any, args: any) {
+            if (isCloudflareCaller()) {
+              return Reflect.apply(target, thisArg, args);
+            }
             notify('strong.domRect')
             const rect = Reflect.apply(target, thisArg, args);
             if (rect) {
@@ -1152,6 +1214,9 @@ export const hookTasks: HookTask[] = [
       {
         const handler = {
           apply(target: () => DOMRectList, thisArg: any, args: any) {
+            if (isCloudflareCaller()) {
+              return Reflect.apply(target, thisArg, args);
+            }
             notify('strong.domRect')
             const rlist = Reflect.apply(target, thisArg, args);
             if (rlist) {
@@ -1203,6 +1268,9 @@ export const hookTasks: HookTask[] = [
         if (!intf) continue;
         useProxy(intf.prototype, ['fillText', 'strokeText'], {
           apply(target: any, thisArg: any, args: any[]) {
+            if (isCloudflareCaller()) {
+              return Reflect.apply(target, thisArg, args);
+            }
             if (args.length >= 3 && typeof args[0] === 'string' && isEmojiProbe(args[0])) {
               notify('strong.emoji')
               args[1] = Number(args[1]) + offsetX
@@ -1490,21 +1558,6 @@ export const hookTasks: HookTask[] = [
         }
       })
 
-    }
-  },
-
-  /**
-   * Proxy
-   */
-  {
-    onEnable: ({ gthis, otherProxy, useProxy }) => {
-      useProxy(gthis, 'Proxy', {
-        construct(target, args, newTarget) {
-          const v = Reflect.construct(target, args, newTarget)
-          otherProxy.add(v)
-          return v;
-        }
-      })
     }
   },
 

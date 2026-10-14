@@ -250,7 +250,7 @@
         "- `Firefox 136+` 권한 허용이 필요합니다"
       ],
       "cloudflare": [
-        "켜면 Cloudflare 인증 페이지와 Turnstile 위젯(`challenges.cloudflare.com`)에서 핑거프린트 변조를 건너뜁니다.",
+        "켜면 Cloudflare 인증 페이지와 Turnstile 위젯(`challenges.cloudflare.com`)에서 핑거프린트 변조(스크립트 주입 및 User-Agent, Client Hints, Accept-Language 요청 헤더 변경 포함)를 건너뜁니다.",
         "인증은 브라우저와 사용자 본인이 수행하며, 확장 프로그램은 관여하지 않습니다. 실제 사용자가 봇으로 오인되어 인증에 계속 실패하는 것을 방지합니다.",
         "끄면 인증 페이지도 변조되어 인증에 실패할 수 있습니다."
       ],

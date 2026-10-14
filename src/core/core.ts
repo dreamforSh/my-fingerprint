@@ -5,6 +5,8 @@ import { hookTasks } from "./tasks";
 import { notify, notifyIframeOrigin } from './utils';
 import { logManager } from '@/utils/log';
 
+import { isCloudflareChallengeContext, isCloudflareElement } from './cloudflare';
+
 export type HookTask = {
   // 条件，为空则默认为true
   condition?: (ctx: FingerprintContext) => boolean | undefined
@@ -12,8 +14,7 @@ export type HookTask = {
   onEnable?: (ctx: FingerprintContext) => void
 }
 
-// export const WIN_KEY = Symbol('__my_fingerprint__')
-export const WIN_KEY = 'my_fingerprint'
+export const WIN_KEY = Symbol.for('__my_fingerprint__')
 
 type SeedInfo = {
   page: number
@@ -65,6 +66,7 @@ export class FingerprintContext {
     disown: symbol;
     raw: symbol;
     reflect: symbol;
+    winKey?: symbol;
   };
 
   private toProxyHandler = <T extends object>(handler: ProxyHandler<T>): ProxyHandler<T> => {
@@ -365,6 +367,7 @@ export class FingerprintContext {
       disown: Symbol('DisownProperty'),
       raw: Symbol('RawValue'),
       reflect: Symbol('Reflect'),
+      winKey: WIN_KEY,
     }
 
     this.args = opt.args ?? {}
@@ -385,6 +388,9 @@ export class FingerprintContext {
 
   public static hookWindow = (win: Window, opt: ContextOptions) => {
     if (!win) throw new Error('win is required');
+    if (opt.conf?.action?.cloudflare?.enable !== false && isCloudflareChallengeContext(win)) {
+      return;
+    }
 
     const { info } = opt;
 
@@ -400,8 +406,17 @@ export class FingerprintContext {
         throw new Error('unable to access cross source');
       }
       if (hooked) throw new Error('win is already hooked');
-      // @ts-ignore
-      win[WIN_KEY] = true;
+      try {
+        Object.defineProperty(win, WIN_KEY, {
+          value: true,
+          writable: true,
+          configurable: true,
+          enumerable: false,
+        });
+      } catch (_) {
+        // @ts-ignore
+        win[WIN_KEY] = true;
+      }
     }
 
     const ctx = new FingerprintContext(win, opt);
@@ -449,11 +464,14 @@ export class FingerprintContext {
     if (!target) return;
     try {
       const _t: any = target;
+      if (isCloudflareElement(_t)) return;
       if (_t === _t.window) {
+        if (isCloudflareChallengeContext(_t)) return;
         return FingerprintContext.hookWindow(_t, this);
       }
       const cw = _t.contentWindow
       if (cw && cw === cw.window) {
+        if (isCloudflareChallengeContext(cw)) return;
         return FingerprintContext.hookWindow(cw, this)
       }
     } catch (_) { }

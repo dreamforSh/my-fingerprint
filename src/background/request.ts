@@ -3,12 +3,16 @@ import { HookType } from '@/types/enum'
 import { isDefaultMode } from "@/utils/storage"
 import { logManager } from '@/utils/log';
 import { getBrowserInfo } from "@/utils/browser";
+import { CF_CHALLENGE_HOSTS } from "@/core/cloudflare";
 
 const logger = logManager.createLogger(__LOG_PREFIX_FILE_PATH__);
 
 type RuleHeader = chrome.declarativeNetRequest.ModifyHeaderInfo
 
 const UA_NET_RULE_ID = 1
+const CF_REQUEST_RULE_ID = 2
+const CF_INITIATOR_RULE_ID = 3
+const RULE_IDS = [UA_NET_RULE_ID, CF_REQUEST_RULE_ID, CF_INITIATOR_RULE_ID]
 
 const MEMORY = {
   browser: getBrowserInfo(),
@@ -90,11 +94,41 @@ const genLanguageRules = ({ config }: LocalStorage): readonly RuleHeader[] => {
 }
 
 /**
+ * Cloudflare 验证兼容：验证组件内不改写请求头
+ * 组件内不注入脚本，若请求头仍被改写，User-Agent / Client Hints / Accept-Language
+ * 会与组件内的 navigator 不一致，验证直接失败（如 Turnstile 300010）
+ * allow 规则优先级高于改写规则，使改写规则对这些请求失效
+ */
+const genCloudflareRules = (
+  { config }: LocalStorage,
+  resourceTypes: chrome.declarativeNetRequest.ResourceType[],
+): chrome.declarativeNetRequest.Rule[] => {
+  if (config.action.cloudflare?.enable === false) return [];
+  const action = { type: "allow" as any }
+  return [
+    /* 发往验证组件的请求（iframe 文档、组件接口） */
+    {
+      id: CF_REQUEST_RULE_ID,
+      priority: 2,
+      action,
+      condition: { resourceTypes, requestDomains: [...CF_CHALLENGE_HOSTS] },
+    },
+    /* 验证组件发起的请求 */
+    {
+      id: CF_INITIATOR_RULE_ID,
+      priority: 2,
+      action,
+      condition: { resourceTypes, initiatorDomains: [...CF_CHALLENGE_HOSTS] },
+    },
+  ]
+}
+
+/**
  * 删除请求头规则
  */
 const removeRules = async () => {
   return await chrome.declarativeNetRequest.updateSessionRules({
-    removeRuleIds: [UA_NET_RULE_ID],
+    removeRuleIds: RULE_IDS,
   }).catch(() => { })
 }
 
@@ -159,7 +193,7 @@ export const reRequestHeader = async (excludeTabId?: number, includeTabId?: numb
 
   /* 更新 SessionRules */
   await chrome.declarativeNetRequest.updateSessionRules({
-    removeRuleIds: [UA_NET_RULE_ID],
+    removeRuleIds: RULE_IDS,
     addRules: [{
       id: UA_NET_RULE_ID,
       condition,
@@ -167,7 +201,7 @@ export const reRequestHeader = async (excludeTabId?: number, includeTabId?: numb
         type: "modifyHeaders" as any,
         requestHeaders: rules,
       },
-    }]
+    }, ...genCloudflareRules(storage, resourceTypes)]
   }).catch((e) => {
     logger.error('reRequestHeader updateSessionRules error:', e);
   })

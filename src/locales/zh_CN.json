@@ -250,7 +250,7 @@
         "- `Firefox 136+` 允许授权"
       ],
       "cloudflare": [
-        "开启后，在 Cloudflare 人机验证页与 Turnstile 组件（`challenges.cloudflare.com`）上跳过指纹改写。",
+        "开启后，在 Cloudflare 人机验证页与 Turnstile 组件（`challenges.cloudflare.com`）上跳过指纹改写，包括脚本注入与请求头（User-Agent、Client Hints、Accept-Language）改写。",
         "验证由浏览器与你本人完成，扩展不参与，避免因指纹被改写而被误判为机器人、导致验证反复失败。",
         "若关闭，验证页也会被改写指纹，可能无法通过验证。"
       ],

@@ -2,6 +2,7 @@ import { hashNumberFromString, makeSeededRandom, seededRandom } from "@/utils/ba
 import { sendToWindow } from "@/utils/message";
 import { debounce } from "@/utils/timer";
 import type { FingerprintContext } from "./core";
+import { isCloudflareCaller } from "./cloudflare";
 
 // 
 // --- notification ---
@@ -132,6 +133,7 @@ export const drawNoiseTo2d = (
   const imageData = useRaw(target.getImageData).call(target, sx, sy, sw, sh, settings)
   /* 空区域无像素可处理，直接返回原始结果（避免后续逻辑与越界访问） */
   if (imageData.width <= 0 || imageData.height <= 0) return imageData;
+  if (isCloudflareCaller()) return imageData;
 
   let noiseIndex = 0;
   let isChanged = false
@@ -206,6 +208,9 @@ export const hookTextMetrics = (
     if (!intf) continue;
     useProxy(intf.prototype, 'measureText', {
       apply(target, thisArg: Canvas2d, args: any) {
+        if (isCloudflareCaller()) {
+          return Reflect.apply(target, thisArg, args)
+        }
         const metrics: TextMetrics = Reflect.apply(target, thisArg, args)
         const text = args[0]
         if (metrics && typeof text === 'string') {
@@ -222,6 +227,9 @@ export const hookTextMetrics = (
 
   useGetterProxy(proto, TEXT_METRICS_KEYS, (key, getter) => ({
     apply(target, thisArg: TextMetrics, args: any) {
+      if (isCloudflareCaller()) {
+        return getter.call(thisArg)
+      }
       const value = getter.call(thisArg)
       const mark = marks.get(thisArg)
       if (mark == null || typeof value !== 'number' || value === 0) return value;

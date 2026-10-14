@@ -250,7 +250,7 @@
         "- `Firefox 136+` Authorization allowed"
       ],
       "cloudflare": [
-        "When enabled, fingerprint spoofing is skipped on Cloudflare challenge pages and the Turnstile widget (`challenges.cloudflare.com`).",
+        "When enabled, fingerprint spoofing is skipped on Cloudflare challenge pages and the Turnstile widget (`challenges.cloudflare.com`), including script injection and request header rewriting (User-Agent, Client Hints, Accept-Language).",
         "Verification is left to the browser and you; the extension stays out of the way, so a real person is not mistaken for a bot and stuck failing the challenge.",
         "If disabled, challenge pages are spoofed too and verification may fail."
       ],

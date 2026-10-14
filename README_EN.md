@@ -140,7 +140,7 @@ This module provides flexible options for customizing fingerprint protection beh
 - Script Settings
   - Global Seed: Used for the “Random by Global Seed” option to ensure consistent output  
   - Injection Mode: Recommended to enable “Fast Injection” for better compatibility and performance  
-  - Cloudflare Compatibility: Enabled by default; skips fingerprint spoofing on Cloudflare challenge pages and the Turnstile widget so a real person is not mistaken for a bot and stuck failing verification
+  - Cloudflare Compatibility: Enabled by default; skips fingerprint spoofing (including request header rewriting) on Cloudflare challenge pages and the Turnstile widget so a real person is not mistaken for a bot and stuck failing verification
 
 - Whitelist Management
   - Supports editing whitelist entries  
