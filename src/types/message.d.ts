@@ -24,6 +24,9 @@ declare namespace BackgroundMessage {
     type: 'policies.set'
     policies: LocalStoragePolicies
   } | {
+    type: 'profiles.set'
+    profiles: CustomProfile[]
+  } | {
     type: 'version.latest'
     $?: string
   } | {

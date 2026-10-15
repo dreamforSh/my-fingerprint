@@ -374,5 +374,30 @@
     "unstable": "不稳定",
     "general": "通用",
     "unsupport-import": "不支持导入"
+  },
+  "preset": {
+    "my-presets": "我的预设",
+    "save-current": "保存当前指纹",
+    "save-as-new": "新建预设",
+    "input-name": "请输入预设名称",
+    "input-name-placeholder": "例如：办公指纹、Chrome 153...",
+    "unnamed-profile": "自定义指纹预设",
+    "save-ok": "当前指纹已保存为预设",
+    "switch-ok": "已切换至预设：{{name}}",
+    "update-current": "覆盖此预设",
+    "update-confirm": "确定用当前配置覆盖此预设吗？",
+    "update-ok": "预设已更新为当前配置",
+    "delete-confirm": "确定删除此指纹预设吗？",
+    "delete-ok": "预设已删除",
+    "rename": "重命名",
+    "rename-ok": "重命名成功",
+    "created-at": "创建于",
+    "updated-at": "更新于",
+    "quick-select": "当前指纹预设",
+    "current-custom": "当前活跃配置（未存为预设）",
+    "details": "指纹配置概要",
+    "no-custom-presets": "暂无保存的自定义预设，点击下方按钮保存当前配置",
+    "manage": "预设管理",
+    "count": "共 {{count}} 个预设"
   }
 }

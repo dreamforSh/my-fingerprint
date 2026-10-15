@@ -8,6 +8,8 @@ type State = {
   storage?: LocalStorage
   config?: LocalStorageConfig
   policies?: LocalStoragePolicies
+  profiles?: CustomProfile[]
+  activeProfileId?: string
 }
 
 type Actions = {
@@ -17,6 +19,10 @@ type Actions = {
   savePolicies: () => void
   saveConfigAsync: () => Promise<void>
   reloadConfig: () => Promise<void>
+  saveCurrentAsProfile: (name: string, id?: string) => Promise<string>
+  applyProfile: (id: string) => Promise<void>
+  deleteProfile: (id: string) => Promise<void>
+  renameProfile: (id: string, name: string) => Promise<void>
 }
 
 export const useStorageStore = create<State & Actions>(((set, get) => {
@@ -27,6 +33,7 @@ export const useStorageStore = create<State & Actions>(((set, get) => {
       storage: s,
       config: s.config,
       policies: s.policies,
+      profiles: s.profiles ?? [],
     })
   }
 
@@ -41,6 +48,7 @@ export const useStorageStore = create<State & Actions>(((set, get) => {
         storage: res.storage,
         config: res.storage.config,
         policies: res.storage.policies,
+        profiles: res.storage.profiles ?? [],
       })
     } else {
       throw new Error(
@@ -110,6 +118,106 @@ export const useStorageStore = create<State & Actions>(((set, get) => {
     }
   }
 
+  const saveCurrentAsProfile = async (name: string, id?: string): Promise<string> => {
+    const { config, profiles = [] } = get()
+    if (!config) throw new Error('Config is empty')
+
+    const clonedConfig: LocalStorageConfig = JSON.parse(JSON.stringify(config))
+    const now = Date.now()
+    let targetId = id
+    let newProfiles: CustomProfile[] = profiles
+
+    if (id) {
+      const idx = profiles.findIndex(p => p.id === id)
+      if (idx !== -1) {
+        newProfiles = [...profiles]
+        newProfiles[idx] = {
+          ...newProfiles[idx],
+          name: name.trim() || newProfiles[idx].name,
+          updatedAt: now,
+          config: clonedConfig,
+        }
+      } else {
+        targetId = undefined
+      }
+    }
+
+    if (!targetId) {
+      targetId = 'profile_' + now + '_' + Math.random().toString(36).slice(2, 7)
+      const newProfile: CustomProfile = {
+        id: targetId,
+        name: name.trim() || `${i18n.t('g.preset')} ${profiles.length + 1}`,
+        createdAt: now,
+        config: clonedConfig,
+      }
+      newProfiles = [newProfile, ...profiles]
+    }
+
+    set({ profiles: newProfiles, activeProfileId: targetId })
+    await sendToBackground({
+      type: 'profiles.set',
+      profiles: newProfiles,
+    })
+    return targetId
+  }
+
+  const applyProfile = async (id: string) => {
+    const { profiles = [], config } = get()
+    const target = profiles.find(p => p.id === id)
+    if (!target) throw new Error('Profile not found')
+
+    const nextConfig: LocalStorageConfig = JSON.parse(JSON.stringify(target.config))
+    // 保留当前的 prefs 与 fastInject 运行状态
+    if (config?.prefs) {
+      nextConfig.prefs = { ...config.prefs }
+    }
+    if (config?.action?.fastInject != null) {
+      nextConfig.action.fastInject = config.action.fastInject
+    }
+
+    set(({ version, storage }) => {
+      if (storage) storage.config = nextConfig
+      return {
+        config: nextConfig,
+        activeProfileId: id,
+        version: version + 1,
+      }
+    })
+
+    await sendToBackground({
+      type: 'config.set',
+      config: nextConfig,
+    })
+  }
+
+  const deleteProfile = async (id: string) => {
+    const { profiles = [], activeProfileId } = get()
+    const newProfiles = profiles.filter(p => p.id !== id)
+    set({
+      profiles: newProfiles,
+      activeProfileId: activeProfileId === id ? undefined : activeProfileId,
+    })
+    await sendToBackground({
+      type: 'profiles.set',
+      profiles: newProfiles,
+    })
+  }
+
+  const renameProfile = async (id: string, name: string) => {
+    const { profiles = [] } = get()
+    const newProfiles = profiles.map(p => {
+      if (p.id === id) {
+        return { ...p, name: name.trim() || p.name, updatedAt: Date.now() }
+      }
+      return p
+    })
+    set({ profiles: newProfiles })
+    await sendToBackground({
+      type: 'profiles.set',
+      profiles: newProfiles,
+    })
+  }
+
   return {
     version: 0,
 
@@ -119,5 +227,9 @@ export const useStorageStore = create<State & Actions>(((set, get) => {
     savePolicies,
     saveConfigAsync,
     reloadConfig,
+    saveCurrentAsProfile,
+    applyProfile,
+    deleteProfile,
+    renameProfile,
   }
 }))

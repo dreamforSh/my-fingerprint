@@ -23,17 +23,17 @@
 <br/>
 
 <p align="center">
-<a href="https://github.com/omegaee/my-fingerprint/releases">
-  <img alt="Latest Release" src="https://img.shields.io/github/v/release/omegaee/my-fingerprint?style=flat">
+<a href="https://github.com/dreamforSh/my-fingerprint/releases">
+  <img alt="Latest Release" src="https://img.shields.io/github/v/release/dreamforSh/my-fingerprint?style=flat">
 </a>
-<a href="https://github.com/omegaee/my-fingerprint/stargazers">
-  <img alt="Stars" src="https://img.shields.io/github/stars/omegaee/my-fingerprint?style=flat">
+<a href="https://github.com/dreamforSh/my-fingerprint/stargazers">
+  <img alt="Stars" src="https://img.shields.io/github/stars/dreamforSh/my-fingerprint?style=flat">
 </a>
-<a href="https://github.com/omegaee/my-fingerprint/issues">
-  <img alt="Issues" src="https://img.shields.io/github/issues/omegaee/my-fingerprint?style=flat">
+<a href="https://github.com/dreamforSh/my-fingerprint/issues">
+  <img alt="Issues" src="https://img.shields.io/github/issues/dreamforSh/my-fingerprint?style=flat">
 </a>
-<a href="https://github.com/omegaee/my-fingerprint/blob/main/LICENSE">
-  <img alt="License" src="https://img.shields.io/github/license/omegaee/my-fingerprint?style=flat">
+<a href="https://github.com/dreamforSh/my-fingerprint/blob/main/LICENSE">
+  <img alt="License" src="https://img.shields.io/github/license/dreamforSh/my-fingerprint?style=flat">
 </a>
 </p>
 
@@ -122,13 +122,13 @@
 
 - 浏览器版本要求：`Chrome/Edge 102+`
 - 推荐版本：120+
-- [下载扩展包](https://github.com/omegaee/my-fingerprint/releases/latest) `.zip` 文件 → 拖入扩展管理页面 → 启用扩展
+- [下载扩展包](https://github.com/dreamforSh/my-fingerprint/releases/latest) `.zip` 文件 → 拖入扩展管理页面 → 启用扩展
 - 可选：启用无痕模式支持
 
 #### Firefox
 
 - 浏览器版本要求：`Firefox 136+`
-- [下载扩展包](https://github.com/omegaee/my-fingerprint/releases/latest) `.xpi` 文件 → 拖入浏览器窗口 → 点击添加
+- [下载扩展包](https://github.com/dreamforSh/my-fingerprint/releases/latest) `.xpi` 文件 → 拖入浏览器窗口 → 点击添加
 
 ## ⚙️ 配置模块 <a id="configuration"></a>
 
@@ -151,7 +151,7 @@
 
 - 订阅机制
   - 可使用配置模板进行初始化（订阅一次后可关闭）  
-    - [标准模式 - 默认配置](https://raw.githubusercontent.com/omegaee/my-fingerprint/main/example/config/template.json)  
+    - [标准模式 - 默认配置](https://raw.githubusercontent.com/dreamforSh/my-fingerprint/main/example/config/template.json)  
   - 空值表示关闭订阅  
   - 支持手动订阅或扩展启动时自动拉取远程配置（JSON 格式）  
   - 订阅配置将覆盖原设置，并合并白名单内容

@@ -1,7 +1,16 @@
+type CustomProfile = {
+  id: string
+  name: string
+  createdAt: number
+  updatedAt?: number
+  config: LocalStorageConfig
+}
+
 type LocalStorage = {
   version: string
   config: LocalStorageConfig  // 配置
   policies: LocalStoragePolicies  // 策略
+  profiles?: CustomProfile[]  // 用户自定义保存的指纹预设
 }
 
 type LogLevelString = "DEBUG" | "INFO" | "WARN" | "ERROR" | "NONE";

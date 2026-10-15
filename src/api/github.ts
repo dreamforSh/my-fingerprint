@@ -1,6 +1,6 @@
 
 const repo = 'my-fingerprint'
-const owner = 'omegaee'
+const owner = 'dreamforSh'
 const branch = 'main'
 
 export type GithubContentItem = {

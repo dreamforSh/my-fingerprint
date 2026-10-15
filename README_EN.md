@@ -23,17 +23,17 @@ A lightweight, zero-disruption browser extension built on Manifest V3.
 <br/>
 
 <p align="center">
-<a href="https://github.com/omegaee/my-fingerprint/releases">
-  <img alt="Latest Release" src="https://img.shields.io/github/v/release/omegaee/my-fingerprint?style=flat">
+<a href="https://github.com/dreamforSh/my-fingerprint/releases">
+  <img alt="Latest Release" src="https://img.shields.io/github/v/release/dreamforSh/my-fingerprint?style=flat">
 </a>
-<a href="https://github.com/omegaee/my-fingerprint/stargazers">
-  <img alt="Stars" src="https://img.shields.io/github/stars/omegaee/my-fingerprint?style=flat">
+<a href="https://github.com/dreamforSh/my-fingerprint/stargazers">
+  <img alt="Stars" src="https://img.shields.io/github/stars/dreamforSh/my-fingerprint?style=flat">
 </a>
-<a href="https://github.com/omegaee/my-fingerprint/issues">
-  <img alt="Issues" src="https://img.shields.io/github/issues/omegaee/my-fingerprint?style=flat">
+<a href="https://github.com/dreamforSh/my-fingerprint/issues">
+  <img alt="Issues" src="https://img.shields.io/github/issues/dreamforSh/my-fingerprint?style=flat">
 </a>
-<a href="https://github.com/omegaee/my-fingerprint/blob/main/LICENSE">
-  <img alt="License" src="https://img.shields.io/github/license/omegaee/my-fingerprint?style=flat">
+<a href="https://github.com/dreamforSh/my-fingerprint/blob/main/LICENSE">
+  <img alt="License" src="https://img.shields.io/github/license/dreamforSh/my-fingerprint?style=flat">
 </a>
 </p>
 
@@ -117,13 +117,13 @@ A lightweight, zero-disruption browser extension built on Manifest V3.
 
 - Required version: `Chrome/Edge 102+`
 - Recommended: 120+
-- [Download](https://github.com/omegaee/my-fingerprint/releases/latest) `.zip` → Drag into extension manager → Enable
+- [Download](https://github.com/dreamforSh/my-fingerprint/releases/latest) `.zip` → Drag into extension manager → Enable
 - Optional: Enable in Incognito/InPrivate mode
 
 #### Firefox
 
 - Required version: `Firefox 136+`
-- [Download](https://github.com/omegaee/my-fingerprint/releases/latest) `.xpi` → Drag into browser window → Click “Add”
+- [Download](https://github.com/dreamforSh/my-fingerprint/releases/latest) `.xpi` → Drag into browser window → Click “Add”
 
 ## ⚙️ Configuration Module <a id="configuration"></a>
 
@@ -148,7 +148,7 @@ This module provides flexible options for customizing fingerprint protection beh
 
 - Subscription Options
   - Use configuration templates for quick setup (subscription can be disabled after initial use)  
-    - [Standard Mode – Default Template](https://raw.githubusercontent.com/omegaee/my-fingerprint/main/example/config/template.json)  
+    - [Standard Mode – Default Template](https://raw.githubusercontent.com/dreamforSh/my-fingerprint/main/example/config/template.json)  
   - Empty value disables subscription  
   - Supports manual subscription or auto-fetching remote config (JSON format) on extension startup  
   - Subscription config will override existing settings and merge whitelist entries

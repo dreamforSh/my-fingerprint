@@ -9,6 +9,7 @@ import { useStorageStore } from "../stores/storage"
 import { FontConfigGroup } from "./font-group"
 import { HookType } from "@/types/enum"
 import { cn } from "@/utils/style"
+import ProfileToolbar from "./profile-toolbar"
 
 type FpItems = Pair<keyof HookFingerprint, HookFingerprintKey>[]
 
@@ -85,13 +86,21 @@ export const FConfig = () => {
     ),
   }))
 
-  return <Collapse
-    size='small'
-    className="h-full bg-[--ant-layout-body-bg] overflow-auto no-scrollbar"
-    bordered={false}
-    accordion
-    expandIconPosition="end"
-    items={items} />
+  return (
+    <div className="h-full flex flex-col overflow-hidden">
+      <ProfileToolbar />
+      <div className="grow overflow-auto no-scrollbar">
+        <Collapse
+          size="small"
+          className="bg-[--ant-layout-body-bg]"
+          bordered={false}
+          accordion
+          expandIconPosition="end"
+          items={items}
+        />
+      </div>
+    </div>
+  )
 }
 
 export default FConfig

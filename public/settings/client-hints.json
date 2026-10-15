@@ -1,6 +1,741 @@
 {
   "chromium": [
     {
+      "key": "Chrome/153 Windows/11 x64",
+      "title": "Chrome/153 Windows/11 x64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+        "platform": "Win32"
+      },
+      "uaData": {
+        "arch": "x86",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "Windows",
+        "platformVersion": "15.0.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "153.0.7820.105",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "153.0.7820.105"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "153.0.7820.105"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/153 MacOS/15.4 arm64",
+      "title": "Chrome/153 MacOS/15.4 arm64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+        "platform": "MacIntel"
+      },
+      "uaData": {
+        "arch": "arm",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "macOS",
+        "platformVersion": "15.4.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "153.0.7820.105",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "153.0.7820.105"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "153.0.7820.105"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/153 Android/15 Pixel 9 Pro",
+      "title": "Chrome/153 Android/15 Pixel 9 Pro",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Mobile Safari/537.36",
+        "appVersion": "5.0 (Linux; Android 15; Pixel 9 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Mobile Safari/537.36",
+        "platform": "Linux arm64"
+      },
+      "uaData": {
+        "arch": "arm",
+        "bitness": "64",
+        "mobile": true,
+        "model": "Pixel 9 Pro",
+        "platform": "Android",
+        "platformVersion": "15",
+        "formFactors": [
+          "Mobile"
+        ],
+        "uaFullVersion": "153.0.7820.95",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "153.0.7820.95"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "153.0.7820.95"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/153 Linux/6.8 x64",
+      "title": "Chrome/153 Linux/6.8 x64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+        "platform": "Linux x86_64"
+      },
+      "uaData": {
+        "arch": "x86",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "Linux",
+        "platformVersion": "6.8.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "153.0.7820.105",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "153.0.7820.105"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "153.0.7820.105"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Edge/153 Windows/11 x64",
+      "title": "Edge/153 Windows/11 x64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 Edg/153.0.0.0",
+        "appVersion": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 Edg/153.0.0.0",
+        "platform": "Win32"
+      },
+      "uaData": {
+        "arch": "x86",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "Windows",
+        "platformVersion": "15.0.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "153.0.3540.80",
+        "versions": [
+          {
+            "brand": "Microsoft Edge",
+            "version": "153.0.3540.80"
+          },
+          {
+            "brand": "Chromium",
+            "version": "153.0.3540.80"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/152 Windows/11 x64",
+      "title": "Chrome/152 Windows/11 x64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+        "platform": "Win32"
+      },
+      "uaData": {
+        "arch": "x86",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "Windows",
+        "platformVersion": "15.0.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "152.0.7760.120",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "152.0.7760.120"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "152.0.7760.120"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/152 MacOS/15.3.1 arm64",
+      "title": "Chrome/152 MacOS/15.3.1 arm64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+        "platform": "MacIntel"
+      },
+      "uaData": {
+        "arch": "arm",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "macOS",
+        "platformVersion": "15.3.1",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "152.0.7760.120",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "152.0.7760.120"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "152.0.7760.120"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/152 Android/14 Galaxy S24 Ultra",
+      "title": "Chrome/152 Android/14 Galaxy S24 Ultra",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36",
+        "appVersion": "5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36",
+        "platform": "Linux arm64"
+      },
+      "uaData": {
+        "arch": "arm",
+        "bitness": "64",
+        "mobile": true,
+        "model": "SM-S928B",
+        "platform": "Android",
+        "platformVersion": "14",
+        "formFactors": [
+          "Mobile"
+        ],
+        "uaFullVersion": "152.0.7760.110",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "152.0.7760.110"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "152.0.7760.110"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/150 Windows/11 arm64",
+      "title": "Chrome/150 Windows/11 arm64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "platform": "Win32"
+      },
+      "uaData": {
+        "arch": "arm",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "Windows",
+        "platformVersion": "15.0.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "150.0.7680.90",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "150.0.7680.90"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "150.0.7680.90"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/150 Windows/10 x64",
+      "title": "Chrome/150 Windows/10 x64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "platform": "Win32"
+      },
+      "uaData": {
+        "arch": "x86",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "Windows",
+        "platformVersion": "10.0.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "150.0.7680.90",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "150.0.7680.90"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "150.0.7680.90"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/150 MacOS/14.7 Intel",
+      "title": "Chrome/150 MacOS/14.7 Intel",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        "platform": "MacIntel"
+      },
+      "uaData": {
+        "arch": "x86",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "macOS",
+        "platformVersion": "14.7.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "150.0.7680.90",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "150.0.7680.90"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "150.0.7680.90"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/150 Android/15 Xiaomi 14",
+      "title": "Chrome/150 Android/15 Xiaomi 14",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Linux; Android 15; 23127PN0CC) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36",
+        "appVersion": "5.0 (Linux; Android 15; 23127PN0CC) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36",
+        "platform": "Linux arm64"
+      },
+      "uaData": {
+        "arch": "arm",
+        "bitness": "64",
+        "mobile": true,
+        "model": "23127PN0CC",
+        "platform": "Android",
+        "platformVersion": "15",
+        "formFactors": [
+          "Mobile"
+        ],
+        "uaFullVersion": "150.0.7680.85",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "150.0.7680.85"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "150.0.7680.85"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/148 Windows/11 x64",
+      "title": "Chrome/148 Windows/11 x64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+        "platform": "Win32"
+      },
+      "uaData": {
+        "arch": "x86",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "Windows",
+        "platformVersion": "15.0.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "148.0.7590.110",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "148.0.7590.110"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "148.0.7590.110"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/148 MacOS/15.2 arm64",
+      "title": "Chrome/148 MacOS/15.2 arm64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+        "platform": "MacIntel"
+      },
+      "uaData": {
+        "arch": "arm",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "macOS",
+        "platformVersion": "15.2.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "148.0.7590.110",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "148.0.7590.110"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "148.0.7590.110"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/148 Linux/6.6 x64",
+      "title": "Chrome/148 Linux/6.6 x64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+        "platform": "Linux x86_64"
+      },
+      "uaData": {
+        "arch": "x86",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "Linux",
+        "platformVersion": "6.6.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "148.0.7590.110",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "148.0.7590.110"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "148.0.7590.110"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Edge/148 Windows/11 x64",
+      "title": "Edge/148 Windows/11 x64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0",
+        "appVersion": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0",
+        "platform": "Win32"
+      },
+      "uaData": {
+        "arch": "x86",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "Windows",
+        "platformVersion": "15.0.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "148.0.3420.75",
+        "versions": [
+          {
+            "brand": "Microsoft Edge",
+            "version": "148.0.3420.75"
+          },
+          {
+            "brand": "Chromium",
+            "version": "148.0.3420.75"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/145 Windows/11 x64",
+      "title": "Chrome/145 Windows/11 x64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+        "platform": "Win32"
+      },
+      "uaData": {
+        "arch": "x86",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "Windows",
+        "platformVersion": "15.0.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "145.0.7480.98",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "145.0.7480.98"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "145.0.7480.98"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/145 MacOS/15.1 arm64",
+      "title": "Chrome/145 MacOS/15.1 arm64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+        "platform": "MacIntel"
+      },
+      "uaData": {
+        "arch": "arm",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "macOS",
+        "platformVersion": "15.1.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "145.0.7480.98",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "145.0.7480.98"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "145.0.7480.98"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/145 Android/14 Pixel 8 Pro",
+      "title": "Chrome/145 Android/14 Pixel 8 Pro",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36",
+        "appVersion": "5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36",
+        "platform": "Linux arm64"
+      },
+      "uaData": {
+        "arch": "arm",
+        "bitness": "64",
+        "mobile": true,
+        "model": "Pixel 8 Pro",
+        "platform": "Android",
+        "platformVersion": "14",
+        "formFactors": [
+          "Mobile"
+        ],
+        "uaFullVersion": "145.0.7480.88",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "145.0.7480.88"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "145.0.7480.88"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/142 Windows/10 x64",
+      "title": "Chrome/142 Windows/10 x64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "platform": "Win32"
+      },
+      "uaData": {
+        "arch": "x86",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "Windows",
+        "platformVersion": "10.0.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "142.0.7390.85",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "142.0.7390.85"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "142.0.7390.85"
+          }
+        ]
+      }
+    },
+    {
+      "key": "Chrome/142 MacOS/15.0 arm64",
+      "title": "Chrome/142 MacOS/15.0 arm64",
+      "ua": {
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "appVersion": "5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "platform": "MacIntel"
+      },
+      "uaData": {
+        "arch": "arm",
+        "bitness": "64",
+        "mobile": false,
+        "model": "",
+        "platform": "macOS",
+        "platformVersion": "15.0.0",
+        "formFactors": [
+          "Desktop"
+        ],
+        "uaFullVersion": "142.0.7390.85",
+        "versions": [
+          {
+            "brand": "Google Chrome",
+            "version": "142.0.7390.85"
+          },
+          {
+            "brand": "Not?A_Brand",
+            "version": "99.0.0.0"
+          },
+          {
+            "brand": "Chromium",
+            "version": "142.0.7390.85"
+          }
+        ]
+      }
+    },
+    {
       "key": "Chrome/140 MacOS/15.3.1 arm64",
       "title": "Chrome/140 MacOS/15.3.1 arm64",
       "ua": {

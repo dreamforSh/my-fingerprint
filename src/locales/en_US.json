@@ -374,5 +374,30 @@
     "unstable": "Unstable",
     "general": "General",
     "unsupport-import": "Unsupport Import"
+  },
+  "preset": {
+    "my-presets": "My Presets",
+    "save-current": "Save Current Fingerprint",
+    "save-as-new": "New Preset",
+    "input-name": "Enter preset name",
+    "input-name-placeholder": "e.g. Work Fingerprint, Chrome 153...",
+    "unnamed-profile": "Custom Profile",
+    "save-ok": "Current fingerprint saved as preset",
+    "switch-ok": "Switched to preset: {{name}}",
+    "update-current": "Overwrite This Preset",
+    "update-confirm": "Overwrite this preset with current configuration?",
+    "update-ok": "Preset updated with current configuration",
+    "delete-confirm": "Are you sure you want to delete this preset?",
+    "delete-ok": "Preset deleted",
+    "rename": "Rename",
+    "rename-ok": "Renamed successfully",
+    "created-at": "Created at",
+    "updated-at": "Updated at",
+    "quick-select": "Current Profile",
+    "current-custom": "Current Active (Unsaved)",
+    "details": "Fingerprint Details",
+    "no-custom-presets": "No saved custom presets. Click button below to save current settings.",
+    "manage": "Manage Presets",
+    "count": "{{count}} preset(s)"
   }
 }

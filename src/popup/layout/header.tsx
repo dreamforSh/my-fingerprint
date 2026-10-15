@@ -9,7 +9,7 @@ import { sendToBackground } from "@/utils/message"
 import { cn } from "@/utils/style"
 import { useStorageStore } from "../stores/storage"
 
-const REPO_URL = 'https://github.com/omegaee/my-fingerprint'
+const REPO_URL = 'https://github.com/dreamforSh/my-fingerprint'
 
 export const PopupHeader = () => {
   const [t] = useTranslation()

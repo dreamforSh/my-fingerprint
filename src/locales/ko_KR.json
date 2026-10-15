@@ -374,5 +374,30 @@
     "unstable": "불안정",
     "general": "일반",
     "unsupport-import": "가져오기 미지원"
+  },
+  "preset": {
+    "my-presets": "내 프리셋",
+    "save-current": "현재 지문 저장",
+    "save-as-new": "새 프리셋",
+    "input-name": "프리셋 이름을 입력하세요",
+    "input-name-placeholder": "예: 업무용 지문, Chrome 153...",
+    "unnamed-profile": "사용자 지정 프리셋",
+    "save-ok": "현재 지문이 프리셋으로 저장되었습니다",
+    "switch-ok": "프리셋으로 전환됨: {{name}}",
+    "update-current": "이 프리셋 덮어쓰기",
+    "update-confirm": "현재 설정으로 이 프리셋을 덮어쓰시겠습니까?",
+    "update-ok": "프리셋이 현재 설정으로 업데이트되었습니다",
+    "delete-confirm": "이 프리셋을 삭제하시겠습니까?",
+    "delete-ok": "프리셋이 삭제되었습니다",
+    "rename": "이름 변경",
+    "rename-ok": "이름이 변경되었습니다",
+    "created-at": "생성 시간",
+    "updated-at": "업데이트 시간",
+    "quick-select": "현재 지문 프리셋",
+    "current-custom": "현재 활성 설정 (미저장)",
+    "details": "지문 설정 요약",
+    "no-custom-presets": "저장된 프리셋이 없습니다. 아래 버튼을 눌러 현재 설정을 저장하세요.",
+    "manage": "프리셋 관리",
+    "count": "총 {{count}}개 프리셋"
   }
 }

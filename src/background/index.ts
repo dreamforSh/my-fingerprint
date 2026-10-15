@@ -18,7 +18,7 @@ const getNewVersion = async () => {
   if (newVersion) {
     return newVersion
   } else {
-    const data = await fetch('https://api.github.com/repos/omegaee/my-fingerprint/releases/latest').then(data => data.json())
+    const data = await fetch('https://api.github.com/repos/dreamforSh/my-fingerprint/releases/latest').then(data => data.json())
     newVersion = data.tag_name
     logger.info('getNewVersion fetched version:', newVersion)
     return newVersion
@@ -84,7 +84,13 @@ chrome.runtime.onMessage.addListener(((msg, sender, sendResponse) => {
     }
     case 'policies.set': {
       updateContext({ policies: msg.policies }).finally(() => {
-        sendResponse<'config.set'>(undefined)
+        sendResponse<'policies.set'>(undefined)
+      })
+      return true
+    }
+    case 'profiles.set': {
+      updateContext({ profiles: msg.profiles }).finally(() => {
+        sendResponse<'profiles.set'>(undefined)
       })
       return true
     }

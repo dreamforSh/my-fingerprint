@@ -26,6 +26,7 @@ export const genDefaultLocalStorage = (): LocalStorage => {
   const sGlobal = genRandomSeed();
   return {
     version: manifest.version,
+    profiles: [],
     config: {
       enable: true,
       seed: {
@@ -155,6 +156,7 @@ export const initLocalStorage = sharedAsync(async () => {
   /* set */
   const _storage: LocalStorage = {
     version: _default.version,
+    profiles: Array.isArray(_curr.profiles) ? _curr.profiles : [],
     config: deepMerge(_default.config, _curr.config),
     policies: {
       whitelist: domainMergeDedup(
@@ -259,6 +261,10 @@ export const updateContext = async (v: DeepPartial<LocalStorage>) => {
     }
   }
 
+  if (v.profiles) {
+    storage.profiles = v.profiles as any
+  }
+
   onUpdateContext(ctx, prev, storage)
 
   return {
@@ -316,6 +322,11 @@ export const importContext = async (data: DeepPartial<LocalStorage>) => {
       ...conf.policies,
       isBlacklistMode: data.policies.isBlacklistMode
     }
+  }
+
+  if (data.profiles && Array.isArray(data.profiles)) {
+    isUpdate = true
+    conf.profiles = data.profiles as any
   }
 
   if (isUpdate) {
