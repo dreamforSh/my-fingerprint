@@ -1,19 +1,73 @@
 import { HookType } from '@/types/enum';
-import { type HookTask } from "./core";
+import { type DisownEntry, type HookTask, type FingerprintContext } from "./core";
 import { makeSeededRandom, seededRandom } from '@/utils/base';
 import {
   notify,
+  addedNodesOf,
   drawNoiseTo2d,
+  findIframes,
+  getCanvas2d,
+  nodeNameOf,
+  charDataGet,
+  charDataSubstring,
+  nodeGet,
+  nodeListAt,
+  rangeGet,
+  rectGet,
+  rectListLength,
+  rectSet,
+  toDOMString,
+  toUint32,
+  typedArrayLength,
   hookTextMetrics,
-  proxyUserAgentData,
   randomCanvasNoise,
   randomFontNoise, randomScreenSize
 } from './utils';
-import { longOffsetToMs, createLongOffsetFormatter } from '@/utils/timezone';
 import { base64ToUint8Array } from '@/utils/array';
 import { hasCjk, hasCjkFontFamily, isCjkLocalVoice, maskCjk, stripCjkFontFamilies } from './cjk';
 import { EMOJI_TEXT_MAX_LENGTH, isEmojiProbe } from './emoji';
 import { isCloudflareCaller } from './cloudflare';
+import {
+  ITERATOR, NativeMap, NativeSet, NativeWeakMap, NativeWeakSet, SET_METHODS, apply, bind, construct, defineProperty,
+  floor, getOwnPropertyDescriptor, hasOwn, isArray, isBinaryData, mapDelete, mapGet, mapSet, nullObject, numIsNaN,
+  numParseFloat, objectCreate, objectFreeze, promiseThen, reflectGet, regExec, setAdd, setHas, strIndexOf, strSlice,
+  strToLowerCase, typedArrayName, uncurryThis, weakMapGet, weakMapSet, weakSetAdd, weakSetDelete, weakSetHas,
+} from './intrinsics';
+
+const numToFixed = uncurryThis(Number.prototype.toFixed) as (n: number, digits: number) => string
+const blobSize = typeof Blob === 'undefined' ? undefined : getOwnPropertyDescriptor(Blob.prototype, 'size')?.get
+
+/**
+ * 以原生 getter 判断是否是 Blob（含其他 realm 创建的 Blob）
+ */
+const isBlob = (v: any) => {
+  if (!blobSize || v == null || typeof v !== 'object') return false;
+  try {
+    apply(blobSize, v, [])
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
+/**
+ * 只含自有迭代器的序列：传给 Blob 等构造函数时不经过页面可改写的 Array.prototype[Symbol.iterator]
+ */
+const ownIterable = <T>(items: T[]): Iterable<T> => {
+  const res: any = nullObject()
+  res[ITERATOR] = () => {
+    let i = 0
+    const it: any = nullObject()
+    it.next = () => {
+      const step: any = nullObject()
+      step.done = i >= items.length
+      step.value = step.done ? undefined : items[i++]
+      return step
+    }
+    return it
+  }
+  return res
+}
 
 /**
  * getter 返回固定值的代理处理器
@@ -21,12 +75,217 @@ import { isCloudflareCaller } from './cloudflare';
  */
 const valueGetterHandler = (getter: () => any, value: any, notifyKey: string): ProxyHandler<() => any> => ({
   apply(target, thisArg: any, args: any) {
-    const raw = getter.call(thisArg)
+    const raw = apply(getter, thisArg, [])
     if (isCloudflareCaller()) return raw;
     notify(notifyKey)
     return value;
   }
 })
+
+/** 字体名单：空 WOFF2 字体（注入时解码） */
+const EMPTY_WOFF2 = base64ToUint8Array("d09GMgABAAAAAAHIAAoAAAAABMgAAAF+AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAABmAAgjoKKD4LBAABNgIkAwQEIAWDLQckGyYEyJ4D7uwQQ3N4OR5Z/PGykGuzrywentba+zO7i5hUmqYrAa80ukkJJqFeDogm8lq16e084xHyQPVmeRwWBa6ldRerIkxchEkypz4kSxb69DdfG+djAr3zQFMcCzsPpA0453kCCS2u8+wv/kIfEP/ubBxLY3mlJZaWl5LjdUERJ7hWkl4SXPF6fFmKNpIqYy568aztyYm+dUioGeLH/RGQRxFmARkZkwCWCYFJilEkSVDX/g8IiIq7LUBCQivaAQVIRdFRdhU79Mj2+WZv80ezAALB323v1vhv7SjA6+XL4ZqOYjE10SqB4JBmnChQcwIAANHFgWpIz9/a6VGA0I4ASaVdgGyCCqDQbgFAaVoKoNJukxBFmzBorCDptA+yVW9QGPQBpYafXRmM/ALk+5P/XxmtROUSh17AFQ8jRblUkaY1T5vGCysmHNLi7ORhNtl6COam856OWg2TfoiFPAFWYXN6u92b3dxtnZ3SnBqvtwwvvd0EdYPCizhEBAAA")
+
+const TRIM_RE = /^\s*([\s\S]*?)\s*$/
+const trim = (s: string) => regExec(TRIM_RE, s)![1]
+
+/** 去掉首尾的引号 */
+const stripQuotes = (s: string) => {
+  let a = 0, b = s.length
+  while (a < b && (s[a] === '"' || s[a] === "'")) a++
+  while (b > a && (s[b - 1] === '"' || s[b - 1] === "'")) b--
+  return strSlice(s, a, b)
+}
+
+const WORKER_FONT_RE = /^(.*?\d+px(?:\/\d+)?\s+)(.+)$/
+
+/**
+ * 替换字体来源中不被允许的 local()（不区分大小写，可出现在任意位置）
+ * 含反斜杠时可能以 CSS 转义拼出 local，整体替换为空的本地字体
+ */
+const maskLocalFonts = (src: string, isAllowed: (name: string) => boolean) => {
+  if (strIndexOf(src, '\\') !== -1) {
+    notify('strong.fonts')
+    return 'local("")'
+  }
+  const lower = strToLowerCase(src)
+  let res = ''
+  let last = 0
+  let from = 0
+  let found = false
+  while (true) {
+    const at = strIndexOf(lower, 'local(', from)
+    if (at === -1) break;
+    from = at + 6
+    /* 前一个字符须是分隔符，排除 xlocal( 之类的标识符 */
+    const prev = at > 0 ? src[at - 1] : ','
+    if (!isSpace(prev) && prev !== ',') continue;
+
+    let i = from
+    while (isSpace(src[i])) i++
+    const q = src[i]
+    const close = q === '"' || q === "'" ? strIndexOf(src, q, i + 1) : i
+    if (close === -1) continue;
+    const end = strIndexOf(src, ')', close)
+    if (end === -1) continue;
+
+    found = true
+    const name = trim(strSlice(src, from, end))
+    if (name && !isAllowed(name)) {
+      res += strSlice(src, last, at) + 'local("")'
+      last = end + 1
+    }
+    from = end + 1
+  }
+  if (found) notify('strong.fonts')
+  return last === 0 ? src : res + strSlice(src, last)
+}
+
+const isSpace = (c: string | undefined) => c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\v'
+const isDigit = (c: string | undefined) => c != null && c >= '0' && c <= '9'
+const GL_FRAG_COLOR = 'gl_FragColor'
+const GL_SEPARATORS = ',+-*/()'
+
+/**
+ * 表达式中数字常量的个数（以数字或「.数字」开头的项，与 parseFloat 能解析出数字一致）
+ */
+const countConstants = (expr: string) => {
+  let count = 0
+  let start = 0
+  for (let i = 0; i <= expr.length; i++) {
+    if (i < expr.length && strIndexOf(GL_SEPARATORS, expr[i]) === -1) continue;
+    let j = start
+    while (j < i && isSpace(expr[j])) j++
+    if (j < i && (isDigit(expr[j]) || (expr[j] === '.' && isDigit(expr[j + 1])))) count++
+    start = i + 1
+  }
+  return count
+}
+
+/**
+ * 为片元着色器的 `gl_FragColor = expr;` 叠加颜色偏移，常量颜色（3 个以上数字常量）保持不变
+ * 手动解析，不使用页面可改写的 String.prototype.replace / RegExp 方法
+ */
+const addFragColorOffset = (source: string, offset: string) => {
+  let from = 0
+  while (true) {
+    const at = strIndexOf(source, GL_FRAG_COLOR, from)
+    if (at === -1) return source;
+    from = at + 1
+
+    let i = at + GL_FRAG_COLOR.length
+    while (isSpace(source[i])) i++
+    if (source[i] !== '=' || source[i + 1] === '=') continue;
+    i++
+    while (isSpace(source[i])) i++
+
+    const end = strIndexOf(source, ';', i)
+    if (end <= i) continue;
+
+    const expr = strSlice(source, i, end)
+    if (countConstants(expr) >= 3) return source;
+    return strSlice(source, 0, at) + GL_FRAG_COLOR + ' = ' + offset + ' + (' + expr + ');' + strSlice(source, end + 1)
+  }
+}
+
+/**
+ * 为原生 Promise 挂接回调
+ * then 会读取 promise.constructor，先设置自有属性，避免页面在 Promise.prototype 上定义 getter 拿到原始结果
+ */
+const thenSafely = <T>(RealmPromise: any, p: Promise<T>, onFulfilled: (v: T) => any) => {
+  const desc: PropertyDescriptor = nullObject()
+  desc.value = RealmPromise
+  desc.writable = true
+  desc.configurable = true
+  defineProperty(p, 'constructor', desc)
+  try {
+    return promiseThen(p, onFulfilled)
+  } finally {
+    delete (p as any).constructor
+  }
+}
+
+/**
+ * User-Agent Client Hints
+ * 改写 NavigatorUAData 原型上的 getter 与方法，页面拿到的仍是原生对象（引用不变），
+ * 不再以代理包装实例：页面在原型上添加的方法、getter 接触不到被包装的原始对象
+ */
+const hookUserAgentData = (ctx: FingerprintContext, info: ClientHintsInfo) => {
+  const { gthis, useProxy, useGetterProxy } = ctx
+  const proto = (gthis as any).NavigatorUAData?.prototype
+  if (!proto) return;
+
+  const uaData = info.uaData
+  const RealmArray = gthis.Array
+  const RealmObject = gthis.Object
+
+  /**
+   * 与原生一致：每次返回新的数组（brands getter 返回冻结的数组），元素只含 brand / version
+   * @param major 版本号只保留主版本
+   */
+  const brandList = (major: boolean, frozen = false) => {
+    const list = uaData.versions
+    const res = new RealmArray()
+    for (let i = 0; list && i < list.length; i++) {
+      const o: any = new RealmObject()
+      const v = list[i].version
+      const dot = strIndexOf(v, '.')
+      o.brand = list[i].brand
+      o.version = major && dot !== -1 ? strSlice(v, 0, dot) : v
+      res[i] = o
+    }
+    return frozen ? objectFreeze(res) : res
+  }
+
+  const values: Record<string, any> = nullObject()
+  values.mobile = uaData.mobile
+  values.platform = uaData.platform
+  useGetterProxy(proto, ['mobile', 'platform'], (key: string, getter) => (
+    valueGetterHandler(getter, values[key], 'weak.userAgentData')
+  ))
+  useGetterProxy(proto, 'brands', (_, getter) => ({
+    apply(target: any, thisArg: any, args: any) {
+      const raw = apply(getter, thisArg, [])
+      if (isCloudflareCaller()) return raw;
+      notify('weak.userAgentData')
+      return brandList(true, true)
+    }
+  }))
+
+  useProxy(proto, 'toJSON', {
+    apply(target: any, thisArg: any, args: any) {
+      const res: any = apply(target, thisArg, args)
+      if (isCloudflareCaller()) return res;
+      notify('weak.userAgentData')
+      res.brands = brandList(true)
+      res.mobile = uaData.mobile
+      res.platform = uaData.platform
+      return res
+    }
+  })
+
+  const RealmPromise = gthis.Promise
+  useProxy(proto, 'getHighEntropyValues', {
+    apply(target: any, thisArg: any, args: any) {
+      const p: Promise<any> = apply(target, thisArg, args)
+      if (isCloudflareCaller()) return p;
+      notify('weak.userAgentData')
+      return thenSafely(RealmPromise, p, (v: any) => {
+        if (!v) return v;
+        if (v.architecture != null) v.architecture = uaData.arch;
+        if (v.bitness != null) v.bitness = uaData.bitness;
+        if (v.model != null) v.model = uaData.model;
+        if (v.mobile != null) v.mobile = uaData.mobile;
+        if (v.platform != null) v.platform = uaData.platform;
+        if (v.platformVersion != null) v.platformVersion = uaData.platformVersion;
+        if (v.formFactors != null) v.formFactors = uaData.formFactors;
+        if (v.uaFullVersion != null) v.uaFullVersion = uaData.uaFullVersion;
+        if (v.brands != null) v.brands = brandList(true);
+        if (v.fullVersionList != null) v.fullVersionList = brandList(false);
+        return v;
+      })
+    }
+  })
+}
 
 export const hookTasks: HookTask[] = [
   /**
@@ -37,26 +296,30 @@ export const hookTasks: HookTask[] = [
     onEnable: ({ win, hookTarget }) => {
       if (!win) return;
 
-      // 监听DOM初始化
-      const observer = new MutationObserver((mutations) => {
-        // if (mutations.length == 1) return;
-        for (const mutation of mutations) {
-          for (const node of mutation.addedNodes) {
-            if (node.nodeName === 'IFRAME') {
-              hookTarget(node)
+      // 监听DOM初始化（使用该窗口自己的 MutationObserver：钩取新窗口时它尚未被页面改写）
+      const observer: MutationObserver = new win.MutationObserver((mutations) => {
+        /* 按下标遍历并使用原生 getter，页面改写迭代器或 nodeName 也无法让 iframe 漏掉 */
+        for (let i = 0; i < mutations.length; i++) {
+          const nodes = addedNodesOf(mutations[i])
+          for (let j = 0; j < nodes.length; j++) {
+            if (nodeNameOf(nodes[j]) === 'IFRAME') {
+              hookTarget(nodes[j])
             }
           }
         }
       });
-      observer.observe(win.document.documentElement, { childList: true, subtree: true });
+      const init: MutationObserverInit = nullObject()
+      init.childList = true
+      init.subtree = true
+      observer.observe(win.document.documentElement, init);
 
       const closeObserver = () => {
         observer.disconnect()
-        win.removeEventListener('DOMContentLoaded', closeObserver, { capture: true })
-        win.removeEventListener('load', closeObserver, { capture: true })
+        win.removeEventListener('DOMContentLoaded', closeObserver, true)
+        win.removeEventListener('load', closeObserver, true)
       }
-      win.addEventListener('DOMContentLoaded', closeObserver, { capture: true })
-      win.addEventListener('load', closeObserver, { capture: true })
+      win.addEventListener('DOMContentLoaded', closeObserver, true)
+      win.addEventListener('load', closeObserver, true)
     },
   },
 
@@ -68,37 +331,33 @@ export const hookTasks: HookTask[] = [
     onEnable: ({ win, hookTarget, useProxy, useSetterProxy }) => {
       if (!win) return;
 
-      const mem = new WeakSet()
+      const mem: WeakSet<object> = new NativeWeakSet()
 
       const handler = {
         apply(target: any, thisArg: any, args: any) {
-          const res: any = Reflect.apply(target, thisArg, args);
-          const fs = thisArg.getElementsByTagName ?
-            thisArg.getElementsByTagName('iframe') :
-            thisArg.querySelectorAll?.('iframe');
-          if (fs?.length) {
-            for (const f of fs) {
-              !mem.has(f) && hookTarget(f) && mem.add(f);
-            }
+          const res: any = apply(target, thisArg, args);
+          /* 原生方法查找与遍历，页面改写 getElementsByTagName、WeakSet 等也无法让 iframe 漏掉 */
+          const fs = findIframes(thisArg)
+          for (let i = 0; i < fs.length; i++) {
+            const f = fs[i]
+            !weakSetHas(mem, f) && hookTarget(f) && weakSetAdd(mem, f);
           }
           return res;
         }
       }
 
-      const pnKeys = ['append', 'prepend', 'replaceChildren'] as const
-
       useProxy(win.Node.prototype, [
         'appendChild', 'insertBefore', 'replaceChild'
       ], handler);
       useProxy(win.Element.prototype, [
-        ...pnKeys, 'insertAdjacentElement', 'insertAdjacentHTML',
+        'append', 'prepend', 'replaceChildren', 'insertAdjacentElement', 'insertAdjacentHTML',
         'before', 'after', 'replaceWith', 'setHTMLUnsafe',
       ], handler);
       useProxy(win.Document.prototype, [
-        ...pnKeys,
+        'append', 'prepend', 'replaceChildren',
       ], handler);
       useProxy(win.ShadowRoot.prototype, [
-        ...pnKeys, 'setHTMLUnsafe',
+        'append', 'prepend', 'replaceChildren', 'setHTMLUnsafe',
       ], handler);
 
       useSetterProxy(win.Element.prototype, ['innerHTML', 'outerHTML'], handler);
@@ -113,52 +372,62 @@ export const hookTasks: HookTask[] = [
     onEnable: ({ win, conf, useProxy, makeScript }) => {
       if (!win) return;
 
-      const blobMap = new Map<string, Blob>();
+      /*
+       * 注入脚本包含配置与种子：拼接 Blob 时使用此刻取得的原生构造函数与方法，
+       * 页面之后替换 Blob、URL.createObjectURL、String.prototype 等也拿不到脚本内容
+       */
+      const NativeBlob = win.Blob
+      const NativeTrustedScriptURL = win.TrustedScriptURL
+      const rawCreateObjectURL = win.URL.createObjectURL
+      const urlObject = win.URL
+      const blobMap: Map<string, Blob> = new NativeMap();
 
       useProxy(win.URL, 'createObjectURL', {
         apply(target, thisArg: URL, args: any) {
           const blob = args[0]
-          if (blob instanceof Blob) {
-            const url = Reflect.apply(target, thisArg, args);
-            blobMap.set(url, blob);
+          if (isBlob(blob)) {
+            const url = apply(target, thisArg, args);
+            mapSet(blobMap, url, blob);
             return url;
           }
-          return Reflect.apply(target, thisArg, args)
+          return apply(target, thisArg, args)
         }
       })
 
       useProxy(win.URL, 'revokeObjectURL', {
         apply(target, thisArg: URL, args: any) {
           const url = args[0]
-          blobMap.delete(url)
-          return Reflect.apply(target, thisArg, args)
+          mapDelete(blobMap, url)
+          return apply(target, thisArg, args)
         }
       })
 
       let tsURLLookup: WeakMap<TrustedScriptURL, TrustedTypePolicy>
       if (win.TrustedTypePolicy) {
-        tsURLLookup = new WeakMap()
+        tsURLLookup = new NativeWeakMap()
         useProxy(win.TrustedTypePolicy.prototype, 'createScriptURL', {
           apply(target, thisArg: TrustedTypePolicy, args: any) {
-            const res = Reflect.apply(target, thisArg, args);
-            tsURLLookup.set(res, thisArg);
+            const res = apply(target, thisArg, args);
+            weakMapSet(tsURLLookup, res, thisArg);
             return res;
           }
         })
       }
 
       function createScriptUrl(url: string) {
-        if (url.toString().startsWith('blob:')) {
+        if (strSlice(url, 0, 5) === 'blob:') {
+          const blobScript = mapGet(blobMap, url);
+          if (!blobScript) return url;
+
           const injected = makeScript();
           if (injected == null) return url;
 
-          const blobScript = blobMap.get(url.toString());
-          if (blobScript) {
-            const blob = new Blob([
-              `(function(){${injected}})();`, blobScript,
-            ], { type: 'application/javascript' });
-            return URL.createObjectURL(blob);
-          }
+          const options: BlobPropertyBag = nullObject()
+          options.type = 'application/javascript'
+          const blob = construct(NativeBlob, [
+            ownIterable<BlobPart>(['(function(){' + injected + '})();', blobScript]), options,
+          ]);
+          return apply(rawCreateObjectURL, urlObject, [blob]) as string;
         }
         return url;
       }
@@ -169,18 +438,19 @@ export const hookTasks: HookTask[] = [
             notify('other.worker.' + name)
             const url = args[0];
 
-            if (win.TrustedScriptURL && url instanceof win.TrustedScriptURL && tsURLLookup) {
-              const ttp = tsURLLookup.get(url);
+            if (NativeTrustedScriptURL && url instanceof NativeTrustedScriptURL && tsURLLookup) {
+              const ttp = weakMapGet(tsURLLookup, url);
               if (ttp) {
                 args[0] = ttp.createScriptURL(
-                  createScriptUrl(url.toString())
+                  createScriptUrl('' + url)
                 );
               }
-            } else if (typeof url === 'string' || url instanceof URL) {
-              args[0] = createScriptUrl(url.toString());
+            } else if (args.length > 0 && typeof url !== 'symbol') {
+              /* 与原生一致地转为字符串（只转换一次），URL 对象等也能识别 */
+              args[0] = createScriptUrl('' + url);
             }
 
-            return Reflect.construct(target, args, newTarget) as Worker;
+            return construct(target, args, newTarget) as Worker;
           }
         })
         useProxy(win, 'Worker', makeHandler('web'));
@@ -189,15 +459,18 @@ export const hookTasks: HookTask[] = [
 
       {
         const isDisabled = conf.fp.other.serviceWorker.type === HookType.disabled;
+        const RealmPromise = win.Promise
+        const promiseReject = RealmPromise.reject
+        const RealmDOMException = win.DOMException
         useProxy(win.ServiceWorkerContainer.prototype, 'register', {
           apply(target, thisArg, args) {
             notify('other.worker.service')
             if (isDisabled) {
-              return Promise.reject(
-                new DOMException("Service workers are disabled", "SecurityError")
-              );
+              return apply(promiseReject, RealmPromise, [
+                construct(RealmDOMException, ["Service workers are disabled", "SecurityError"])
+              ]);
             }
-            return Reflect.apply(target, thisArg, args);
+            return apply(target, thisArg, args);
           }
         });
       }
@@ -208,7 +481,9 @@ export const hookTasks: HookTask[] = [
    * Navigator
    */
   {
-    condition: ({ conf, isDefault }) => !isDefault(Object.values(conf.fp.navigator)),
+    condition: ({ conf: { fp: { navigator: n } }, isDefault }) => (
+      !isDefault([n.clientHints, n.languages, n.hardwareConcurrency, n.deviceMemory])
+    ),
     onEnable: (ctx) => {
       const { gthis, conf, useHookMode, useGetterProxy } = ctx;
       const fps = conf.fp.navigator;
@@ -229,16 +504,7 @@ export const hookTasks: HookTask[] = [
           })
         }
         if (uaInfo.uaData != null) {
-          useGetterProxy(prototype, ('userAgentData' as any), (_, getter) => ({
-            apply(target, thisArg: Navigator, args: any) {
-              if (isCloudflareCaller()) {
-                return getter.call(thisArg);
-              }
-              notify('weak.userAgentData')
-              const result = getter.call(thisArg)
-              return proxyUserAgentData(ctx, result, uaInfo);
-            }
-          }))
+          hookUserAgentData(ctx, uaInfo)
         }
       }
 
@@ -264,7 +530,7 @@ export const hookTasks: HookTask[] = [
    * Screen
    */
   {
-    condition: ({ conf, isDefault }) => !isDefault(Object.values(conf.fp.screen)),
+    condition: ({ conf: { fp: { screen: s } }, isDefault }) => !isDefault([s.size, s.depth]),
     onEnable: ({ win, conf, useHookMode, useGetterProxy }) => {
       if (!win) return;
 
@@ -279,7 +545,7 @@ export const hookTasks: HookTask[] = [
           'pixelDepth': depth.pixelDepth ?? depth.pixel,
         }
         useGetterProxy(win.Screen.prototype,
-          Object.keys(tasks) as (keyof Screen)[],
+          ['colorDepth', 'pixelDepth'],
           (key, getter) => {
             const num = tasks[key]
             if (num == null) return;
@@ -327,7 +593,7 @@ export const hookTasks: HookTask[] = [
           if (args[0] === '2d') {
             args[1] = { willReadFrequently: true, ...(args[1] as any) }
           }
-          return target.apply(thisArg, args);
+          return apply(target, thisArg, args);
         }
       })
 
@@ -339,7 +605,7 @@ export const hookTasks: HookTask[] = [
           useProxy(win.CanvasRenderingContext2D.prototype, 'getImageData', {
             apply: (target, thisArg: CanvasRenderingContext2D, args: Parameters<typeof CanvasRenderingContext2D.prototype.getImageData>) => {
               notify('strong.canvas')
-              return drawNoiseTo2d(ctx, noise, thisArg, ...args);
+              return drawNoiseTo2d(ctx, noise, thisArg, args);
             }
           })
         }
@@ -355,36 +621,24 @@ export const hookTasks: HookTask[] = [
     onEnable: ({ gthis, conf, useSeed, useProxy }) => {
       const seed = useSeed(conf.fp.other.webgl)
       if (seed != null) {
-        const fragColorRegex = /gl_FragColor\s*=\s*([\s\S]+?);/;
-        const paramRegex = /[,+\-*/()]/;
-
         const randGen = makeSeededRandom(seed, 1e-2, 1e-5);
-        const randFn = () => randGen().toFixed(5);
+        const randFn = () => numToFixed(randGen(), 5);
 
         const vecOffset = `vec4(${randFn()},${randFn()},${randFn()},0)`;
 
         const handler = {
           apply: (target: any, thisArg: WebGLRenderingContext | WebGL2RenderingContext, args: any) => {
             if (isCloudflareCaller()) {
-              return target.apply(thisArg, args);
+              return apply(target, thisArg, args);
             }
             notify('strong.webgl')
 
             const source = args[1]
             if (source && typeof source === 'string') {
-              args[1] = source.replace(fragColorRegex, (match, expr: string) => {
-                const tokens = expr.split(paramRegex).map(v => v.trim());
-                const constantCount = tokens.filter(v => !isNaN(parseFloat(v))).length;
-
-                if (constantCount >= 3) {
-                  return match;
-                } else {
-                  return `gl_FragColor = ${vecOffset} + (${expr});`;
-                }
-              });
+              args[1] = addFragColorOffset(source, vecOffset);
             }
 
-            return Reflect.apply(target, thisArg, args);
+            return apply(target, thisArg, args);
           }
         }
         useProxy(gthis.WebGLRenderingContext.prototype, 'shaderSource', handler)
@@ -401,7 +655,9 @@ export const hookTasks: HookTask[] = [
     onEnable: ({ gthis, conf, useHookMode, useProxy }) => {
       const fps = conf.fp.normal
 
-      let ex: WEBGL_debug_renderer_info | null
+      /* WEBGL_debug_renderer_info 的常量：不经由页面可改写的 getExtension 获取 */
+      const UNMASKED_VENDOR_WEBGL = 0x9245
+      const UNMASKED_RENDERER_WEBGL = 0x9246
 
       /* Report: Parameter */
       const info = useHookMode(fps.gpuInfo).value
@@ -409,24 +665,18 @@ export const hookTasks: HookTask[] = [
         const handler = {
           apply: (target: any, thisArg: WebGLRenderingContext, args: any) => {
             if (isCloudflareCaller()) {
-              return target.apply(thisArg, args);
+              return apply(target, thisArg, args);
             }
-            if (!ex) ex = thisArg.getExtension('WEBGL_debug_renderer_info');
-            if (ex) {
-              if (args[0] === ex.UNMASKED_VENDOR_WEBGL) {
-                notify('weak.gpuInfo')
-                // 模拟调用
-                if (info.vendor && target.apply(thisArg, args)) {
-                  return info.vendor;
-                }
-              } else if (args[0] === ex.UNMASKED_RENDERER_WEBGL) {
-                notify('weak.gpuInfo')
-                if (info.renderer && target.apply(thisArg, args)) {
-                  return info.renderer;
-                }
-              }
+            if (args.length > 0) args[0] = toUint32(args[0])
+            const pname = args[0]
+            if (pname === UNMASKED_VENDOR_WEBGL || pname === UNMASKED_RENDERER_WEBGL) {
+              notify('weak.gpuInfo')
+              // 模拟调用：原生返回有效值（扩展已启用）时才替换
+              const real = apply(target, thisArg, args)
+              const value = pname === UNMASKED_VENDOR_WEBGL ? info.vendor : info.renderer
+              return value && real ? value : real
             }
-            return target.apply(thisArg, args);
+            return apply(target, thisArg, args);
           }
         }
         useProxy(gthis.WebGLRenderingContext.prototype, 'getParameter', handler);
@@ -450,21 +700,18 @@ export const hookTasks: HookTask[] = [
       const handler = {
         apply: (target: Function, thisArg: OffscreenCanvas | HTMLCanvasElement, args: any) => {
           if (isCloudflareCaller()) {
-            return Reflect.apply(target, thisArg, args);
+            return apply(target, thisArg, args);
           }
-          /* 2d：空画布（宽或高为 0）无像素可处理，跳过以保持与原生一致（否则 getImageData 会抛 IndexSizeError） */
-          if (noiseCanvas && thisArg.width > 0 && thisArg.height > 0) {
-            const c2d = thisArg.getContext('2d');
-            if (c2d) {
-              notify('strong.canvas');
-              drawNoiseTo2d(
-                ctx, noiseCanvas, c2d as any,
-                0, 0, thisArg.width, thisArg.height
-              );
-              return Reflect.apply(target, thisArg, args);
-            }
+          /*
+           * 2d：空画布（宽或高为 0）无像素可处理，跳过以保持与原生一致（否则 getImageData 会抛 IndexSizeError）
+           * 尺寸与上下文使用原生方法读取，页面改写 width、getContext 也无法跳过加噪
+           */
+          const c2d = noiseCanvas ? getCanvas2d(thisArg) : undefined
+          if (noiseCanvas && c2d) {
+            notify('strong.canvas');
+            drawNoiseTo2d(ctx, noiseCanvas, c2d.ctx, [0, 0, c2d.width, c2d.height]);
           }
-          return Reflect.apply(target, thisArg, args);
+          return apply(target, thisArg, args);
         }
       }
 
@@ -483,34 +730,44 @@ export const hookTasks: HookTask[] = [
   {
     condition: ({ conf }) => conf.fp.other.canvasCjk?.type === HookType.enabled,
     onEnable: ({ gthis, win, useRaw, useProxy, useGetterProxy, useSetterProxy }) => {
-      /* 中文字符按缺字渲染 */
-      const textHandler = {
+      /*
+       * 中文字符按缺字渲染
+       * 参数个数足够时先与原生一致地转为字符串：页面传入带 toString 的对象也会被处理
+       */
+      const textHandler = (minArgs: number) => ({
         apply(target: any, thisArg: any, args: any[]) {
           if (isCloudflareCaller()) {
-            return Reflect.apply(target, thisArg, args)
+            return apply(target, thisArg, args)
           }
-          const text = args[0]
-          if (typeof text === 'string' && hasCjk(text)) {
-            notify('strong.canvasCjk')
-            args[0] = maskCjk(text)
+          if (args.length >= minArgs) {
+            const text = toDOMString(args[0])
+            args[0] = text
+            if (hasCjk(text)) {
+              notify('strong.canvasCjk')
+              args[0] = maskCjk(text)
+            }
           }
-          return Reflect.apply(target, thisArg, args)
+          return apply(target, thisArg, args)
         }
-      }
+      })
 
       /* 实际生效的 font -> 页面设置的 font */
-      const shownFonts = new Map<string, string>()
+      const shownFonts: Map<string, string> = new NativeMap()
       /* 页面设置的 font -> 占位族名 */
-      const placeholders = new Map<string, string>()
+      const placeholders: Map<string, string> = new NativeMap()
+      let placeholderCount = 0
 
-      for (const intf of [win?.CanvasRenderingContext2D, gthis.OffscreenCanvasRenderingContext2D]) {
+      const intfs = [win?.CanvasRenderingContext2D, gthis.OffscreenCanvasRenderingContext2D]
+      for (let i = 0; i < intfs.length; i++) {
+        const intf = intfs[i]
         if (!intf) continue;
         const proto = intf.prototype
 
-        useProxy(proto, ['fillText', 'strokeText', 'measureText'], textHandler)
+        useProxy(proto, ['fillText', 'strokeText'], textHandler(3))
+        useProxy(proto, 'measureText', textHandler(1))
 
         /* 移除中文字体族，读取时仍返回页面设置的值 */
-        const desc = Object.getOwnPropertyDescriptor(proto, 'font')
+        const desc = getOwnPropertyDescriptor(proto, 'font')
         const rawGet = useRaw(desc?.get)
         const rawSet = useRaw(desc?.set)
         if (!rawGet || !rawSet) continue;
@@ -522,10 +779,10 @@ export const hookTasks: HookTask[] = [
           return {
             apply(target, thisArg: any, args: any) {
               if (isCloudflareCaller()) {
-                return getter.call(thisArg);
+                return apply(getter, thisArg, []);
               }
-              const value = getter.call(thisArg)
-              return shownFonts.get(value) ?? value
+              const value = apply(getter, thisArg, [])
+              return mapGet(shownFonts, value) ?? value
             }
           }
         })
@@ -533,30 +790,30 @@ export const hookTasks: HookTask[] = [
         useSetterProxy(proto, 'font', (_, setter) => ({
           apply(target, thisArg: any, args: any) {
             if (isCloudflareCaller()) {
-              return setter.call(thisArg, args[0]);
+              return apply(setter, thisArg, [args[0]]);
             }
-            const value = args[0]
-            if (!chainGet || typeof value !== 'string' || !hasCjkFontFamily(value)) {
-              return setter.call(thisArg, value)
+            const value = toDOMString(args[0])
+            if (!chainGet || !hasCjkFontFamily(value)) {
+              return apply(setter, thisArg, [value])
             }
             notify('strong.canvasCjk')
 
             /* 由浏览器规范化原始值，非法值会被忽略 */
-            const before = rawGet.call(thisArg)
-            rawSet.call(thisArg, value)
-            const shown = rawGet.call(thisArg)
+            const before = apply(rawGet, thisArg, [])
+            apply(rawSet, thisArg, [value])
+            const shown = apply(rawGet, thisArg, [])
             if (shown === before) return;
 
-            let placeholder = placeholders.get(shown)
+            let placeholder = mapGet(placeholders, shown)
             if (!placeholder) {
-              placeholder = `"x-cjk-${placeholders.size + 1}"`
-              placeholders.set(shown, placeholder)
+              placeholder = `"x-cjk-${++placeholderCount}"`
+              mapSet(placeholders, shown, placeholder)
             }
             const stripped = stripCjkFontFamilies(shown, placeholder)
-            if (!stripped) return setter.call(thisArg, value);
+            if (!stripped) return apply(setter, thisArg, [value]);
 
-            setter.call(thisArg, stripped)
-            shownFonts.set(chainGet.call(thisArg), shown)
+            apply(setter, thisArg, [stripped])
+            mapSet(shownFonts, apply(chainGet, thisArg, []), shown)
           }
         }))
       }
@@ -575,42 +832,50 @@ export const hookTasks: HookTask[] = [
       const seed = useSeed(conf.fp.other.audio)
       if (seed == null) return;
 
-      const mem = new WeakSet()
+      const mem: WeakSet<object> = new NativeWeakSet()
 
       useProxy(win.AudioBuffer.prototype, 'getChannelData', {
         apply: (target, thisArg: AudioBuffer, args: Parameters<typeof AudioBuffer.prototype.getChannelData>) => {
           if (isCloudflareCaller()) {
-            return target.apply(thisArg, args);
+            return apply(target, thisArg, args);
           }
           notify('strong.audio')
-          const data = target.apply(thisArg, args)
-          if (mem.has(data)) return data;
+          const data = apply(target, thisArg, args)
+          if (weakSetHas(mem, data)) return data;
 
-          const step = data.length > 2000 ? 100 : 20;
-          for (let i = 0; i < data.length; i += step) {
+          /* 原生 length、手写绝对值：页面改写 TypedArray 原型或 Math.abs 无法跳过加噪、读到原始采样 */
+          const len = typedArrayLength(data)
+          const step = len > 2000 ? 100 : 20;
+          for (let i = 0; i < len; i += step) {
             const v = data[i]
-            if (v !== 0 && Math.abs(v) > 1e-7) {
+            if (v !== 0 && (v < 0 ? -v : v) > 1e-7) {
               data[i] += seededRandom(seed + i) * 1e-7;
             }
           }
 
-          mem.add(data)
+          weakSetAdd(mem, data)
           return data;
         }
       })
+
+      /* 已钩取的 getChannelData：页面之后改写原型上的方法也无法跳过 */
+      const getChannelData = win.AudioBuffer.prototype.getChannelData
 
       useProxy(win.AudioBuffer.prototype, [
         'copyFromChannel', 'copyToChannel',
       ], {
         apply: (target, thisArg: AudioBuffer, args: any) => {
           if (isCloudflareCaller()) {
-            return target.apply(thisArg, args);
+            return apply(target, thisArg, args);
           }
-          const channel = args[1]
-          if (channel != null) {
-            thisArg.getChannelData(channel)
+          if (args.length > 1) {
+            args[1] = toUint32(args[1])
+            /* 先为该声道加噪；参数非法时交给原生方法抛出它自己的错误 */
+            try {
+              apply(getChannelData, thisArg, [args[1]])
+            } catch (_) { }
           }
-          return target.apply(thisArg, args)
+          return apply(target, thisArg, args)
         }
       })
 
@@ -618,10 +883,10 @@ export const hookTasks: HookTask[] = [
       useGetterProxy(win.DynamicsCompressorNode.prototype, 'reduction', (_, getter) => ({
         apply(target, thisArg, args: any) {
           if (isCloudflareCaller()) {
-            return getter.call(thisArg);
+            return apply(getter, thisArg, []);
           }
           notify('strong.audio')
-          const res = getter.call(thisArg);
+          const res = apply(getter, thisArg, []);
           return (typeof res === 'number' && res !== 0) ? res + dcNoise : res;
         }
       }))
@@ -649,32 +914,96 @@ export const hookTasks: HookTask[] = [
         tzValue.locales = []
       }
 
-      const systemFmt = createLongOffsetFormatter()
-      const customFmt = createLongOffsetFormatter(tzValue.zone)
+      /*
+       * 换算用到的 Date / Intl 方法在此刻（页面脚本运行前或新窗口刚创建时）取得：
+       * 页面之后改写 formatToParts、getTime、Object.assign 等，既无法关闭时区伪装，
+       * 也拿不到以系统时区换算的中间结果（否则可反推出真实时区）
+       */
+      const _Date = gthis.Date;
+      const _DateTimeFormat = gthis.Intl.DateTimeFormat;
+      const RealmArray = gthis.Array;
+      const RealmObject = gthis.Object;
+      const formatToParts = _DateTimeFormat.prototype.formatToParts;
+      const dateGetTime = _Date.prototype.getTime;
+      const dateSetTime = _Date.prototype.setTime;
 
-      const systemOffsetStr = systemFmt?.()
-      const customOffsetStr = customFmt?.()
+      /* 无原型的选项对象：页面在 Object.prototype 上添加的属性不会被构造函数读到 */
+      const options = (entries: Record<string, any>) => {
+        const res = nullObject()
+        for (const k in entries) {
+          if (hasOwn(entries, k)) res[k] = entries[k]
+        }
+        return res
+      }
+
+      const formatParts = (formatter: Intl.DateTimeFormat, time: number): Intl.DateTimeFormatPart[] | undefined => {
+        try {
+          return apply(formatToParts, formatter, [time])
+        } catch (_) { }
+      }
+
+      /**
+       * 时区偏移格式化器，返回 "GMT+08:00"、"GMT-04:00"、"GMT"
+       */
+      const makeOffsetFormatter = (timeZone?: string) => {
+        let formatter: Intl.DateTimeFormat
+        try {
+          formatter = construct(_DateTimeFormat, ['en-US', options(timeZone ? { timeZone, timeZoneName: 'longOffset' } : { timeZoneName: 'longOffset' })])
+        } catch (_) {
+          return;
+        }
+        return (time: number) => {
+          const parts = formatParts(formatter, time)
+          for (let i = 0; parts && i < parts.length; i++) {
+            if (parts[i].type === 'timeZoneName') return parts[i].value
+          }
+        }
+      }
+
+      /**
+       * "GMT±HH:MM[:SS]" 转为毫秒
+       */
+      const offsetToMs = (s: string) => {
+        if (s.length <= 3) return 0;
+        const sign = s[3] === '-' || s[3] === '−' ? -1 : 1
+        const units = [3600, 60, 1]
+        let total = 0, part = 0, idx = 0
+        for (let i = 4; i <= s.length && idx < units.length; i++) {
+          const c = s[i]
+          if (i === s.length || c === ':') {
+            total += part * units[idx++]
+            part = 0
+          } else if (c >= '0' && c <= '9') {
+            part = part * 10 + (+c)
+          }
+        }
+        return sign * total * 1000
+      }
+
+      const systemFmt = makeOffsetFormatter()
+      const customFmt = makeOffsetFormatter(tzValue.zone)
+
+      const now = apply(dateGetTime, construct(_Date, []), [])
+      const systemOffsetStr = systemFmt?.(now)
+      const customOffsetStr = customFmt?.(now)
 
       if (systemFmt == null || customFmt == null || systemOffsetStr == null || customOffsetStr == null) {
         logger.warn('timezone customOffsetStr is null')
         return;
       }
 
-      const systemOffsetMs = longOffsetToMs(systemOffsetStr);
-      const customOffsetMs = longOffsetToMs(customOffsetStr);
+      const systemOffsetMs = offsetToMs(systemOffsetStr);
+      const customOffsetMs = offsetToMs(customOffsetStr);
 
-      const getDiffMs = (date: Date) => {
-        const c = customFmt(date);
-        const s = systemFmt(date);
-        const cMs = c ? longOffsetToMs(c) : customOffsetMs;
-        const sMs = s ? longOffsetToMs(s) : systemOffsetMs;
+      const getDiffMs = (time: number) => {
+        const c = customFmt(time);
+        const s = systemFmt(time);
+        const cMs = c ? offsetToMs(c) : customOffsetMs;
+        const sMs = s ? offsetToMs(s) : systemOffsetMs;
         return cMs - sMs;
       }
 
-      const _Date = gthis.Date;
-      const _DateTimeFormat = gthis.Intl.DateTimeFormat;
-
-      const dtFormatter = new _DateTimeFormat('en-US', {
+      const dtFormatter: Intl.DateTimeFormat = construct(_DateTimeFormat, ['en-US', options({
         timeZone: tzValue.zone ?? 'Asia/Shanghai',
         weekday: 'short',
         month: 'short',
@@ -686,36 +1015,73 @@ export const hookTasks: HookTask[] = [
         fractionalSecondDigits: 3,
         hour12: false,
         timeZoneName: 'longOffset',
-      })
+      })])
 
-      const weekdayShortToNumeric: Record<string, number> = {
+      const weekdayShortToNumeric: Record<string, number> = options({
         Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
-      };
+      });
 
-      const monthShortToNumeric: Record<string, number> = {
+      const monthShortToNumeric: Record<string, number> = options({
         Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
-      };
+      });
 
       type TimeParts = Partial<Record<keyof Intl.DateTimeFormatPartTypesRegistry, string>>
 
-      const getParts = (date: Date): TimeParts | undefined => {
-        try {
-          const plist = dtFormatter.formatToParts(date)
-          return plist.reduce((acc: TimeParts, cur) => {
-            acc[cur.type] = cur.value
-            return acc
-          }, {})
-        } catch (e) { }
+      const getParts = (time: number): TimeParts | undefined => {
+        const plist = formatParts(dtFormatter, time)
+        if (!plist) return;
+        const acc: TimeParts = nullObject()
+        for (let i = 0; i < plist.length; i++) {
+          acc[plist[i].type] = plist[i].value
+        }
+        return acc
+      }
+
+      const toInt = (s?: string) => {
+        let n = 0
+        for (let i = 0; s && i < s.length; i++) {
+          if (s[i] >= '0' && s[i] <= '9') n = n * 10 + (+s[i])
+        }
+        return n
+      }
+      const pad2 = (s?: string) => s == null ? s : s.length < 2 ? '0' + s : s
+      const stripColon = (s?: string) => {
+        if (s == null) return s;
+        const i = strIndexOf(s, ':')
+        return i === -1 ? s : strSlice(s, 0, i) + strSlice(s, i + 1)
       }
 
       function isNumeric(v: any) {
-        return !isNaN(v) && !isNaN(parseFloat(v));
+        return !numIsNaN(v) && !numIsNaN(numParseFloat(v));
       }
 
+      /* 在页面指定的语言后追加自定义语言 */
       const useCustomLocales = (locales?: Intl.LocalesArgument) => {
-        if (!locales) return tzValue.locales;
-        if (typeof locales === 'string') return [locales, ...tzValue.locales];
-        if (Array.isArray(locales)) return [...locales, ...tzValue.locales];
+        const res = new RealmArray()
+        if (locales) {
+          if (isArray(locales)) {
+            for (let i = 0; i < locales.length; i++) res[res.length] = locales[i]
+          } else {
+            res[0] = locales
+          }
+        }
+        for (let i = 0; i < tzValue.locales.length; i++) res[res.length] = tzValue.locales[i]
+        return res
+      }
+
+      /* 页面未指定时区时使用自定义时区；以页面选项为原型，其余选项照常读取 */
+      const useCustomTimeZone = (opts: any) => {
+        const res = opts !== null && (typeof opts === 'object' || typeof opts === 'function') ?
+          objectCreate(opts) : new RealmObject()
+        if (res.timeZone === undefined) {
+          const desc: PropertyDescriptor = nullObject()
+          desc.value = tzValue.zone
+          desc.writable = true
+          desc.enumerable = true
+          desc.configurable = true
+          defineProperty(res, 'timeZone', desc)
+        }
+        return res
       }
 
       /* DateTimeFormat */
@@ -723,74 +1089,85 @@ export const hookTasks: HookTask[] = [
         construct: (target, args: Parameters<typeof Intl.DateTimeFormat>, newTarget) => {
           notify('weak.timezone')
           args[0] = useCustomLocales(args[0]);
-          args[1] = Object.assign({ timeZone: tzValue.zone }, args[1]);
-          return new target(...args)
+          args[1] = useCustomTimeZone(args[1]);
+          return construct(target, args, newTarget)
         },
         apply: (target, thisArg: Intl.DateTimeFormat, args: Parameters<typeof Intl.DateTimeFormat>) => {
           notify('weak.timezone')
           args[0] = useCustomLocales(args[0]);
-          args[1] = Object.assign({ timeZone: tzValue.zone }, args[1]);
-          return target.apply(thisArg, args)
+          args[1] = useCustomTimeZone(args[1]);
+          return apply(target, thisArg, args)
         },
       })
+
+      /* Date.prototype.toString 被钩取后的代理，Date() 作为函数调用时使用 */
+      let dateToString: Function | undefined
 
       /* Date */
       useProxy(gthis, 'Date', {
         construct: (target, args, newTarget) => {
           notify('weak.timezone')
-          const raw = Reflect.construct(target, args, newTarget);
+          const raw = construct(target, args, newTarget);
 
-          if (typeof args[0] === 'string' && args[0].includes('/')) {
-            return Reflect.construct(target, [raw.getTime() - getDiffMs(raw)], newTarget);
-          }
-          if (args[1] != null && isNumeric(args[1])) {
-            return Reflect.construct(target, [raw.getTime() - getDiffMs(raw)], newTarget);
+          if ((typeof args[0] === 'string' && strIndexOf(args[0], '/') !== -1) || (args[1] != null && isNumeric(args[1]))) {
+            const time = apply(dateGetTime, raw, [])
+            return construct(target, [time - getDiffMs(time)], newTarget);
           }
 
           return raw;
         },
+        /* 与原生一致：作为函数调用时忽略参数，返回当前时间的字符串 */
         apply: (target, thisArg: Date, args: Parameters<typeof Date>) => {
-          return Reflect.construct(target, args).toString()
+          const date = construct(target, [])
+          return dateToString ? apply(dateToString, date, []) : apply(target, undefined, [])
         }
       })
 
       /* Date getter */
       {
-        type DateHandler = (parts: TimeParts, date: Date) => any
+        type DateHandler = (parts: TimeParts, time: number) => any
 
         const tasks: { [key in keyof Date]?: DateHandler } = {
-          'getTimezoneOffset': (_, d) => {
-            const c = customFmt(d);
-            const cMs = c ? longOffsetToMs(c) : customOffsetMs;
-            return -Math.trunc(cMs / 60000)
+          'getTimezoneOffset': (_, time) => {
+            const c = customFmt(time);
+            const v = (c ? offsetToMs(c) : customOffsetMs) / 60000;
+            return -(v - v % 1)
           },
-          'toString': (p) => `${p.weekday} ${p.month} ${p.day?.padStart(2, '0')} ${p.year} ${p.hour?.padStart(2, '0')}:${p.minute?.padStart(2, '0')}:${p.second?.padStart(2, '0')} ${p.timeZoneName?.replace(':', '')}`,
-          'toDateString': (p) => `${p.weekday} ${p.month} ${p.day?.padStart(2, '0')} ${p.year}`,
-          'toTimeString': (p) => `${p.hour?.padStart(2, '0')}:${p.minute?.padStart(2, '0')}:${p.second?.padStart(2, '0')} ${p.timeZoneName?.replace(':', '')}`,
-          'getHours': (p) => parseInt(p.hour ?? '0'),
-          'getMinutes': (p) => parseInt(p.minute ?? '0'),
-          'getSeconds': (p) => parseInt(p.second ?? '0'),
-          'getFullYear': (p) => parseInt(p.year ?? '0'),
-          'getDate': (p) => parseInt(p.day ?? '0'),
+          'toString': (p) => `${p.weekday} ${p.month} ${pad2(p.day)} ${p.year} ${pad2(p.hour)}:${pad2(p.minute)}:${pad2(p.second)} ${stripColon(p.timeZoneName)}`,
+          'toDateString': (p) => `${p.weekday} ${p.month} ${pad2(p.day)} ${p.year}`,
+          'toTimeString': (p) => `${pad2(p.hour)}:${pad2(p.minute)}:${pad2(p.second)} ${stripColon(p.timeZoneName)}`,
+          'getHours': (p) => toInt(p.hour),
+          'getMinutes': (p) => toInt(p.minute),
+          'getSeconds': (p) => toInt(p.second),
+          'getFullYear': (p) => toInt(p.year),
+          'getDate': (p) => toInt(p.day),
           'getMonth': (p) => monthShortToNumeric[p.month ?? ''] ?? 0,
           'getDay': (p) => weekdayShortToNumeric[p.weekday ?? ''] ?? 0,
         }
 
-        useProxy(gthis.Date.prototype, Object.keys(tasks) as (keyof Date)[],
+        useProxy(gthis.Date.prototype, [
+          'getTimezoneOffset', 'toString', 'toDateString', 'toTimeString', 'getHours', 'getMinutes', 'getSeconds',
+          'getFullYear', 'getDate', 'getMonth', 'getDay',
+        ],
           (key) => {
             const task = tasks[key]
             return task && {
               apply: (target: any, thisArg: Date, args: Parameters<typeof Date.prototype.toString>) => {
                 notify('weak.timezone')
-                const parts = getParts(thisArg)
+                /* 以原生 getTime 取时间值：非 Date 时与原生一致抛错，页面也无法经由 Symbol.toPrimitive 干扰换算 */
+                const time = apply(dateGetTime, thisArg, [])
+                const parts = getParts(time)
                 if (parts) {
-                  const res = task(parts, thisArg)
+                  const res = task(parts, time)
                   if (res != null) return res;
                 }
-                return Reflect.apply(target, thisArg, args)
+                /* 无效日期：原生结果（NaN、"Invalid Date"）与时区无关 */
+                return apply(target, thisArg, args)
               }
             }
           })
+
+        dateToString = gthis.Date.prototype.toString
       }
 
       /* Date setter */
@@ -800,14 +1177,15 @@ export const hookTasks: HookTask[] = [
           apply(target: any, thisArg: Date, args: any[]) {
             notify('weak.timezone');
 
-            const diffMs = getDiffMs(thisArg)
+            const time = apply(dateGetTime, thisArg, [])
+            const diffMs = getDiffMs(time)
             // to system
-            const localDate = new _Date(thisArg.getTime() + diffMs);
+            const localDate = construct(_Date, [time + diffMs]);
             // set
-            target.apply(localDate, args);
+            apply(target, localDate, args);
             // to custom
-            const timeMs = localDate.getTime() - diffMs;
-            thisArg.setTime(timeMs);
+            const timeMs = apply(dateGetTime, localDate, []) - diffMs;
+            apply(dateSetTime, thisArg, [timeMs]);
 
             return timeMs;
           }
@@ -819,9 +1197,9 @@ export const hookTasks: HookTask[] = [
       ], {
         apply: (target: any, thisArg: Date, args: Parameters<typeof Date.prototype.toLocaleString>) => {
           notify('weak.timezone')
-          args[0] = useCustomLocales(args[0]);;
-          args[1] = Object.assign({ timeZone: tzValue.zone }, args[1]);
-          return target.apply(thisArg, args);
+          args[0] = useCustomLocales(args[0]);
+          args[1] = useCustomTimeZone(args[1]);
+          return apply(target, thisArg, args);
         }
       })
     },
@@ -851,7 +1229,7 @@ export const hookTasks: HookTask[] = [
         });
       }
 
-      [
+      const rtcKeys = [
         'RTCDataChannel',
         'RTCIceCandidate',
         'RTCConfiguration',
@@ -864,10 +1242,11 @@ export const hookTasks: HookTask[] = [
         'webkitMediaStreamTrack',
         'webkitRTCPeerConnection',
         'webkitRTCSessionDescription',
-      ].forEach((key) => {
+      ]
+      for (let i = 0; i < rtcKeys.length; i++) {
         // @ts-ignore
-        if (win[key]) win[key] = undefined;
-      });
+        if (win[rtcKeys[i]]) win[rtcKeys[i]] = undefined;
+      }
     },
   },
 
@@ -896,10 +1275,10 @@ export const hookTasks: HookTask[] = [
       ], (key, getter) => ({
         apply(target: () => any, thisArg: HTMLElement, args: any) {
           if (isCloudflareCaller()) {
-            return getter.call(thisArg);
+            return apply(getter, thisArg, []);
           }
           notify('strong.fonts')
-          const result = getter.call(thisArg);
+          const result = apply(getter, thisArg, []);
           const mark = (thisArg.style?.fontFamily ?? key) + result;
           return result + randomFontNoise(seed, mark);
         }
@@ -917,44 +1296,56 @@ export const hookTasks: HookTask[] = [
       const action = conf.action.fonts;
       if (action.allowlist.length === 0) return;
 
-      const allowlist = new Set(action.allowlist.map(v => v.toLowerCase()))
-      const quotesReg = /^['"]+|['"]+$/g
+      /* 名单在此刻整理；运行时只用缓存的原生方法查询，页面改写 String / Set 原型无法绕过 */
+      const allowlist: Set<string> = new NativeSet()
+      for (let i = 0; i < action.allowlist.length; i++) {
+        setAdd(allowlist, strToLowerCase(action.allowlist[i]))
+      }
+      const isAllowed = (name: string) => setHas(allowlist, strToLowerCase(stripQuotes(trim(name))))
 
       /* FontFaceSet */
       if (win) {
-        const emptyWoff2Base64 = "d09GMgABAAAAAAHIAAoAAAAABMgAAAF+AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAABmAAgjoKKD4LBAABNgIkAwQEIAWDLQckGyYEyJ4D7uwQQ3N4OR5Z/PGykGuzrywentba+zO7i5hUmqYrAa80ukkJJqFeDogm8lq16e084xHyQPVmeRwWBa6ldRerIkxchEkypz4kSxb69DdfG+djAr3zQFMcCzsPpA0453kCCS2u8+wv/kIfEP/ubBxLY3mlJZaWl5LjdUERJ7hWkl4SXPF6fFmKNpIqYy568aztyYm+dUioGeLH/RGQRxFmARkZkwCWCYFJilEkSVDX/g8IiIq7LUBCQivaAQVIRdFRdhU79Mj2+WZv80ezAALB323v1vhv7SjA6+XL4ZqOYjE10SqB4JBmnChQcwIAANHFgWpIz9/a6VGA0I4ASaVdgGyCCqDQbgFAaVoKoNJukxBFmzBorCDptA+yVW9QGPQBpYafXRmM/ALk+5P/XxmtROUSh17AFQ8jRblUkaY1T5vGCysmHNLi7ORhNtl6COam856OWg2TfoiFPAFWYXN6u92b3dxtnZ3SnBqvtwwvvd0EdYPCizhEBAAA";
-        const emptyWoff2 = base64ToUint8Array(emptyWoff2Base64)
-        for (const v of action.blocklist) {
-          win.document.fonts.add(new FontFace(v, emptyWoff2, { unicodeRange: "U+0" }))
+        /* 屏蔽名单：添加只覆盖 U+0 的空字体，同名的本地字体被遮蔽 */
+        const fonts = win.document.fonts
+        const RealmFontFace = win.FontFace
+        const rawAdd = win.FontFaceSet.prototype.add
+        const rawDelete = win.FontFaceSet.prototype.delete
+        for (let i = 0; i < action.blocklist.length; i++) {
+          const desc: FontFaceDescriptors = nullObject()
+          desc.unicodeRange = 'U+0'
+          apply(rawAdd, fonts, [construct(RealmFontFace, [action.blocklist[i], EMPTY_WOFF2, desc])])
         }
 
-        const ffs = new Set<FontFace>()
+        /* 页面只能看到自己添加的字体 */
+        const ffs: Set<FontFace> = new NativeSet()
         useProxy(win.FontFaceSet.prototype, 'clear', {
           apply() {
-            for (const f of ffs.values()) {
-              win.document.fonts.delete(f)
+            const list: FontFace[] = []
+            apply(SET_METHODS.forEach, ffs, [(f: FontFace) => { list[list.length] = f }])
+            for (let i = 0; i < list.length; i++) {
+              apply(rawDelete, fonts, [list[i]])
             }
-            return ffs.clear()
+            return apply(SET_METHODS.clear, ffs, [])
           }
         })
         useProxy(win.FontFaceSet.prototype, [
           'add', 'delete', 'has',
         ], (key) => ({
           apply(target, thisArg, args) {
-            const res = Reflect.apply(target, thisArg, args)
-            Reflect.apply(ffs[key], ffs, args)
+            const res = apply(target, thisArg, args)
+            apply(SET_METHODS[key], ffs, args)
             return res
           },
         }))
         useProxy(win.FontFaceSet.prototype, [
-          Symbol.iterator, 'forEach', 'entries', 'keys', 'values',
+          ITERATOR, 'forEach', 'entries', 'keys', 'values',
         ], (key) => ({
           apply(target, thisArg, args) {
-            return Reflect.apply(ffs[key], ffs, args)
+            return apply(SET_METHODS[key], ffs, args)
           },
         }))
-        useGetterProxy(win.FontFaceSet.prototype, 'size', (key) => ({
-          apply() { return Reflect.get(ffs, key) }
+        useGetterProxy(win.FontFaceSet.prototype, 'size', () => ({
+          apply() { return apply(SET_METHODS.size, ffs, []) }
         }))
       }
 
@@ -962,73 +1353,68 @@ export const hookTasks: HookTask[] = [
       if (win) {
         useProxy(win, 'FontFace', {
           construct: (target, args: ConstructorParameters<typeof FontFace>, newTarget) => {
-            const source = args[1]
-            if (typeof source === 'string' && source.startsWith('local(')) {
-              notify('strong.fonts')
-              const name = source.substring(source.indexOf('(') + 1, source.indexOf(')'));
-              if (name && !allowlist.has(name.replace(quotesReg, "").toLowerCase())) {
-                args[1] = `local("")`
-              }
+            /* 字符串来源（非二进制数据时与原生一致地转为字符串）：替换不在白名单中的 local() */
+            if (args.length > 1 && !isBinaryData(args[1])) {
+              args[1] = maskLocalFonts(toDOMString(args[1]), isAllowed)
             }
-            return Reflect.construct(target, args, newTarget)
+            return construct(target, args, newTarget)
           },
         })
       }
 
       /* Canvas 2d */
       if (worker) {
-        const fontSymbol = Symbol('font');
+        const fontOf: WeakMap<object, string> = new NativeWeakMap()
 
-        function parseFontString(fontStr: string) {
-          const match = fontStr.match(/^(.*?\d+px(?:\/\d+)?\s+)(.+)$/);
+        const parseFontString = (fontStr: string) => {
+          const match = regExec(WORKER_FONT_RE, fontStr)
+          const families: string[] = []
           if (!match) {
-            return { prefix: "", families: [] };
+            return { prefix: "", families };
           }
 
-          const prefix = match[1].trim();
+          const prefix = trim(match[1]);
           const familyPart = match[2];
-
-          const families = familyPart
-            .split(",")
-            .map(f => f.trim().replace(quotesReg, ""));
-
+          let start = 0
+          for (let i = 0; i <= familyPart.length; i++) {
+            if (i < familyPart.length && familyPart[i] !== ',') continue;
+            families[families.length] = stripQuotes(trim(strSlice(familyPart, start, i)))
+            start = i + 1
+          }
           return { prefix, families };
         }
 
-        [
-          worker.OffscreenCanvasRenderingContext2D,
-          // win?.CanvasRenderingContext2D,
-        ].forEach((intf) => {
-          if (!intf) return;
-
+        const intf = worker.OffscreenCanvasRenderingContext2D
+        if (intf) {
           useSetterProxy(intf.prototype, 'font', (key, setter) => ({
             apply(target, thisArg: CanvasRenderingContext2D, args) {
               notify('strong.fonts')
-              const font = args[0]
+              const font = toDOMString(args[0])
               if (font) {
                 const { prefix, families } = parseFontString(font);
-                const fs = families.filter(f => allowlist.has(f.toLowerCase()));
-                if (fs.length === 0) {
-                  fs.push('sans-serif')
+                let kept = ''
+                for (let i = 0; i < families.length; i++) {
+                  if (!setHas(allowlist, strToLowerCase(families[i]))) continue;
+                  kept += (kept ? ',' : '') + '"' + families[i] + '"'
                 }
-                args[0] = `${prefix} ${fs.map(f => `"${f}"`).join(',')}`;
-                (thisArg as any)[fontSymbol] = font;
+                args[0] = prefix + ' ' + (kept || '"sans-serif"');
+                weakMapSet(fontOf, thisArg, font)
               }
-              return setter.call(thisArg, args[0])
+              return apply(setter, thisArg, [args[0]])
             }
           }))
 
           useGetterProxy(intf.prototype, 'font', (key, getter) => ({
             apply(target, thisArg: CanvasRenderingContext2D, args) {
               notify('strong.fonts')
-              const font = (thisArg as any)[fontSymbol]
+              const font = weakMapGet(fontOf, thisArg)
               if (font) {
                 return font
               }
-              return getter.call(thisArg)
+              return apply(getter, thisArg, [])
             }
           }))
-        })
+        }
       }
     }
   },
@@ -1038,108 +1424,143 @@ export const hookTasks: HookTask[] = [
    */
   {
     condition: ({ conf }) => conf.fp.other.webgpu.type !== HookType.default,
-    onEnable: ({ win, conf, useSeed, useDefine, useProxy, newProxy }) => {
+    onEnable: ({ win, conf, useSeed, useProxy, useGetterProxy }) => {
       if (!win) return;
 
       const seed = useSeed(conf.fp.other.webgpu)
       if (seed == null) return;
 
-      /* GPUAdapter & GPUDevice */
+      const RealmArray = win.Array
+      const RealmObject = win.Object
+      const RealmFloat32Array = win.Float32Array
+
+      /* 以给定原型创建对象并设置自有属性：其余属性仍从页面传入的对象读取（只读取一次） */
+      const derive = (proto: object, key: string, value: any) => {
+        const res = objectCreate(proto)
+        const desc: PropertyDescriptor = nullObject()
+        desc.value = value
+        desc.writable = true
+        desc.enumerable = true
+        desc.configurable = true
+        defineProperty(res, key, desc)
+        return res
+      }
+
+      /* 读取序列：数组按下标，其他可迭代对象经其迭代器读取一次 */
+      const toList = (v: any): any[] | undefined => {
+        if (isArray(v)) {
+          const res: any[] = []
+          for (let i = 0; i < v.length; i++) res[i] = v[i]
+          return res
+        }
+        const iter = v?.[ITERATOR]
+        if (typeof iter !== 'function') return;
+        const it: any = apply(iter, v, [])
+        const res: any[] = []
+        while (true) {
+          const step = it.next()
+          if (step.done) break;
+          res[res.length] = step.value
+        }
+        return res
+      }
+
+      /* GPUSupportedLimits：改写原型上的 getter（GPUAdapter / GPUDevice 的 limits 都是它的实例） */
       {
         const makeNoise = (raw: any, offset: number) => {
           if (isCloudflareCaller()) return raw;
           notify('strong.webgpu')
           const rn = seededRandom(seed + (offset * 7), 64, 1)
-          return raw ? raw - Math.floor(rn) : raw;
+          return raw ? raw - floor(rn) : raw;
         }
 
-        const handler = (_: any, desc: PropertyDescriptor) => {
-          const getter = desc.get
-          return getter && {
-            get() {
-              if (isCloudflareCaller()) {
-                return getter.call(this);
-              }
-              const limits = getter.call(this);
-              return newProxy(limits, {
-                get(target, prop) {
-                  const value = target[prop];
-                  switch (prop) {
-                    case "maxBufferSize": return makeNoise(value, 0);
-                    case "maxStorageBufferBindingSize": return makeNoise(value, 1);
-                  }
-                  return typeof value === "function" ? value.bind(target) : value;
-                }
-              })
-            }
+        // @ts-ignore
+        const proto = win.GPUSupportedLimits?.prototype
+        proto && useGetterProxy(proto, ['maxBufferSize', 'maxStorageBufferBindingSize'], (key: string, getter) => ({
+          apply(target: any, thisArg: any, args: any) {
+            return makeNoise(apply(getter, thisArg, []), key === 'maxBufferSize' ? 0 : 1)
           }
-        }
-
-        // @ts-ignore
-        win.GPUAdapter && useDefine(win.GPUAdapter.prototype, 'limits', handler)
-        // @ts-ignore
-        win.GPUDevice && useDefine(win.GPUDevice.prototype, 'limits', handler)
+        }))
       }
 
-      /*** GPUCommandEncoder ***/
-      // @ts-ignore
-      if (win.GPUCommandEncoder?.prototype?.beginRenderPass) {
+      /*** GPUCommandEncoder：为首个颜色附件的清除色加噪，不修改页面传入的对象 ***/
+      {
+        const COLOR_KEYS = ['r', 'g', 'b', 'a']
+        const noiseOf = (v: number, offset: number) => v - v * seededRandom(seed + (offset * 7), 0.01, 0.001)
+
+        const noisyColor = (cv: any) => {
+          if (cv == null || (typeof cv !== 'object' && typeof cv !== 'function')) return;
+          const list = toList(cv)
+          if (list) {
+            const res = new RealmArray()
+            for (let i = 0; i < list.length; i++) res[i] = noiseOf(+list[i], i)
+            return res
+          }
+          /* GPUColorDict：按字典成员顺序（a、b、g、r）读取一次 */
+          const values: Record<string, any> = nullObject()
+          values.a = cv.a
+          values.b = cv.b
+          values.g = cv.g
+          values.r = cv.r
+          const res: any = new RealmObject()
+          for (let i = 0; i < COLOR_KEYS.length; i++) {
+            const k = COLOR_KEYS[i]
+            res[k] = values[k] === undefined ? undefined : noiseOf(+values[k], i)
+          }
+          return res
+        }
+
+        const noisyRenderPass = (desc: any) => {
+          if (desc == null || typeof desc !== 'object') return desc;
+          const attachments = toList(desc.colorAttachments)
+          const first = attachments?.[0]
+          if (!attachments || first == null || typeof first !== 'object') return desc;
+          const color = noisyColor(first.clearValue)
+          if (!color) return desc;
+          const list = new RealmArray()
+          for (let i = 0; i < attachments.length; i++) {
+            list[i] = i === 0 ? derive(first, 'clearValue', color) : attachments[i]
+          }
+          return derive(desc, 'colorAttachments', list)
+        }
+
         // @ts-ignore
-        useProxy(win.GPUCommandEncoder.prototype, 'beginRenderPass', {
-          apply(target, self, args) {
+        const proto = win.GPUCommandEncoder?.prototype
+        proto?.beginRenderPass && useProxy(proto, 'beginRenderPass', {
+          apply(target: any, self: any, args: any) {
             if (isCloudflareCaller()) {
-              return Reflect.apply(target, self, args);
+              return apply(target, self, args);
             }
             notify('strong.webgpu')
-            if (args?.[0]?.colorAttachments?.[0]?.clearValue) {
-              try {
-                const _clearValue = args[0].colorAttachments[0].clearValue
-                let offset = 0
-                for (let key in _clearValue) {
-                  let value = _clearValue[key]
-                  const noise = seededRandom(seed + (offset++ * 7), 0.01, 0.001)
-                  value += value * noise * -1
-                  _clearValue[key] = Math.abs(value)
-                }
-                args[0].colorAttachments[0].clearValue = _clearValue;
-              } catch (e) { }
-            }
-            return Reflect.apply(target, self, args);
+            if (args.length > 0) args[0] = noisyRenderPass(args[0])
+            return apply(target, self, args);
           }
         })
       }
 
-      /*** GPUQueue ***/
-      // @ts-ignore
-      if (win.GPUQueue?.prototype?.writeBuffer) {
+      /*** GPUQueue：约 5% 的数据加噪，写入副本，不修改页面传入的数组 ***/
+      {
         // @ts-ignore
-        useProxy(win.GPUQueue.prototype, 'writeBuffer', {
-          apply(target, self, args) {
+        const proto = win.GPUQueue?.prototype
+        proto?.writeBuffer && useProxy(proto, 'writeBuffer', {
+          apply(target: any, self: any, args: any) {
             if (isCloudflareCaller()) {
-              return Reflect.apply(target, self, args);
+              return apply(target, self, args);
             }
             notify('strong.webgpu')
-            const _data = args?.[2]
-            if (_data && _data instanceof Float32Array) {
-              try {
-                const count = Math.ceil(_data.length * 0.05)
-                let offset = 0
-                const selected = Array(_data.length)
-                  .map((_, i) => i)
-                  .sort(() => seededRandom(seed + (offset++ * 7), 1, -1))
-                  .slice(0, count);
-
-                offset = 0
-                for (let i = 0; i < selected.length; i++) {
-                  const index = selected[i];
-                  let value = _data[index];
-                  const noise = seededRandom(seed + (offset++ * 7), +0.0001, -0.0001)
-                  _data[index] += noise * value;
-                }
-                // args[2] = _data;
-              } catch (e) { }
+            const data = args[2]
+            if (typedArrayName(data) === 'Float32Array') {
+              const copy = construct(RealmFloat32Array, [data])
+              const len = typedArrayLength(copy)
+              for (let i = 0; i < len; i += 20) {
+                const index = i + floor(seededRandom(seed + i, 20, 0))
+                if (index >= len) break;
+                const value = copy[index]
+                copy[index] = value + value * seededRandom(seed + (index * 7), 1e-4, -1e-4)
+              }
+              args[2] = copy
             }
-            return Reflect.apply(target, self, args);
+            return apply(target, self, args);
           }
         })
       }
@@ -1159,18 +1580,23 @@ export const hookTasks: HookTask[] = [
 
       const noise = seededRandom(seed, 1e-6, -1e-6);
 
+      /* 原生 getter / setter 读写：页面改写 DOMRect 原型无法跳过加噪 */
+      const noiseRect = (rect: DOMRect) => {
+        const x = rectGet(rect, 'x')
+        if (x !== 0) rectSet(rect, 'x', x + noise);
+        const width = rectGet(rect, 'width')
+        if (width !== 0) rectSet(rect, 'width', width + noise);
+      }
+
       {
         const handler = {
           apply(target: () => DOMRect, thisArg: any, args: any) {
             if (isCloudflareCaller()) {
-              return Reflect.apply(target, thisArg, args);
+              return apply(target, thisArg, args);
             }
             notify('strong.domRect')
-            const rect = Reflect.apply(target, thisArg, args);
-            if (rect) {
-              if (rect.x !== 0) rect.x += noise;
-              if (rect.width !== 0) rect.width += noise;
-            }
+            const rect = apply(target, thisArg, args);
+            if (rect) noiseRect(rect);
             return rect;
           }
         }
@@ -1182,15 +1608,14 @@ export const hookTasks: HookTask[] = [
         const handler = {
           apply(target: () => DOMRectList, thisArg: any, args: any) {
             if (isCloudflareCaller()) {
-              return Reflect.apply(target, thisArg, args);
+              return apply(target, thisArg, args);
             }
             notify('strong.domRect')
-            const rlist = Reflect.apply(target, thisArg, args);
+            const rlist = apply(target, thisArg, args);
             if (rlist) {
-              for (let i = 0; i < rlist.length; i++) {
-                const rect = rlist[i];
-                if (rect.x !== 0) rect.x += noise;
-                if (rect.width !== 0) rect.width += noise;
+              const len = rectListLength(rlist)
+              for (let i = 0; i < len; i++) {
+                noiseRect(rlist[i]);
               }
             }
             return rlist;
@@ -1231,62 +1656,79 @@ export const hookTasks: HookTask[] = [
       const offsetX = jitter('x')
       const offsetY = jitter('y')
 
-      for (const intf of [win?.CanvasRenderingContext2D, gthis.OffscreenCanvasRenderingContext2D]) {
+      const intfs = [win?.CanvasRenderingContext2D, gthis.OffscreenCanvasRenderingContext2D]
+      for (let i = 0; i < intfs.length; i++) {
+        const intf = intfs[i]
         if (!intf) continue;
         useProxy(intf.prototype, ['fillText', 'strokeText'], {
           apply(target: any, thisArg: any, args: any[]) {
             if (isCloudflareCaller()) {
-              return Reflect.apply(target, thisArg, args);
+              return apply(target, thisArg, args);
             }
-            if (args.length >= 3 && typeof args[0] === 'string' && isEmojiProbe(args[0])) {
-              notify('strong.emoji')
-              args[1] = Number(args[1]) + offsetX
-              args[2] = Number(args[2]) + offsetY
+            /* 与原生一致地转换参数（只转换一次）：页面传入带 toString / valueOf 的对象也会被处理 */
+            if (args.length >= 3) {
+              const text = toDOMString(args[0])
+              args[0] = text
+              if (isEmojiProbe(text)) {
+                notify('strong.emoji')
+                args[1] = +args[1] + offsetX
+                args[2] = +args[2] + offsetY
+              }
             }
-            return Reflect.apply(target, thisArg, args)
+            return apply(target, thisArg, args)
           }
         })
       }
 
       if (!win) return;
 
-      /* DOM 尺寸：仅处理只含一个短文本节点的元素，避免读取大段文本 */
+      /*
+       * DOM 尺寸：仅处理只含一个短文本节点的元素，避免读取大段文本
+       * 节点类型、子节点、文本与 Range 位置都用原生 getter 读取：页面改写它们无法跳过加噪
+       */
+      const ELEMENT_NODE = 1
+      const TEXT_NODE = 3
+
       const textOfNode = (node?: Node | null): string | undefined => {
         if (!node) return;
-        if (node.nodeType === Node.TEXT_NODE) {
-          const t = node as Text
-          if (t.length > EMOJI_TEXT_MAX_LENGTH) return;
-          return isEmojiProbe(t.data) ? t.data : undefined
+        const type = nodeGet(node, 'nodeType')
+        if (type === TEXT_NODE) {
+          if (charDataGet(node, 'length') > EMOJI_TEXT_MAX_LENGTH) return;
+          const data: string = charDataGet(node, 'data')
+          return isEmojiProbe(data) ? data : undefined
         }
-        if (node.nodeType === Node.ELEMENT_NODE) {
-          const child = node.firstChild
-          if (!child || child !== node.lastChild || child.nodeType !== Node.TEXT_NODE) return;
+        if (type === ELEMENT_NODE) {
+          const child = nodeGet(node, 'firstChild')
+          if (!child || child !== nodeGet(node, 'lastChild') || nodeGet(child, 'nodeType') !== TEXT_NODE) return;
           return textOfNode(child)
         }
       }
 
       const textOfRange = (range: Range): string | undefined => {
-        const node = range.startContainer
-        if (node !== range.endContainer) return;
-        const count = range.endOffset - range.startOffset
-        if (node.nodeType === Node.TEXT_NODE) {
+        const node = rangeGet(range, 'startContainer')
+        if (node !== rangeGet(range, 'endContainer')) return;
+        const start: number = rangeGet(range, 'startOffset')
+        const count = rangeGet(range, 'endOffset') - start
+        if (nodeGet(node, 'nodeType') === TEXT_NODE) {
           if (count > EMOJI_TEXT_MAX_LENGTH) return;
-          const text = (node as Text).substringData(range.startOffset, count)
+          const text = charDataSubstring(node, start, count)
           return isEmojiProbe(text) ? text : undefined
         }
-        if (count === 1) return textOfNode(node.childNodes[range.startOffset])
+        if (count === 1) return textOfNode(nodeListAt(nodeGet(node, 'childNodes'), start))
       }
 
       /* 首个矩形与 getBoundingClientRect 使用相同噪音，保持一致 */
       const noiseRect = (rect: DOMRect | undefined, mark: string) => {
         if (!rect) return;
-        if (rect.width !== 0) rect.width += noiseOf(mark, 'width')
-        if (rect.height !== 0) rect.height += noiseOf(mark, 'height')
+        const width = rectGet(rect, 'width')
+        if (width !== 0) rectSet(rect, 'width', width + noiseOf(mark, 'width'))
+        const height = rectGet(rect, 'height')
+        if (height !== 0) rectSet(rect, 'height', height + noiseOf(mark, 'height'))
       }
 
       const rectHandler = <T>(textOf: (target: T) => string | undefined) => ({
         apply(target: any, thisArg: T, args: any) {
-          const rect: DOMRect = Reflect.apply(target, thisArg, args)
+          const rect: DOMRect = apply(target, thisArg, args)
           const text = rect && textOf(thisArg)
           if (text) {
             notify('strong.emoji')
@@ -1298,12 +1740,13 @@ export const hookTasks: HookTask[] = [
 
       const rectListHandler = <T>(textOf: (target: T) => string | undefined) => ({
         apply(target: any, thisArg: T, args: any) {
-          const list: DOMRectList = Reflect.apply(target, thisArg, args)
-          const text = list?.length ? textOf(thisArg) : undefined
+          const list: DOMRectList = apply(target, thisArg, args)
+          const len = list ? rectListLength(list) : 0
+          const text = len ? textOf(thisArg) : undefined
           if (text) {
             notify('strong.emoji')
-            for (let i = 0; i < list.length; i++) {
-              noiseRect(list[i], i === 0 ? text : `${text}:${i}`)
+            for (let i = 0; i < len; i++) {
+              noiseRect(list[i], i === 0 ? text : text + ':' + i)
             }
           }
           return list
@@ -1329,11 +1772,26 @@ export const hookTasks: HookTask[] = [
 
       const isDisabled = conf.fp.other.speech.type === HookType.disabled
 
+      /* 结果数组由本 realm 的 Array 构造，语音属性用原生 getter 读取：页面改写 filter、lang 等无法绕过 */
+      const RealmArray = win.Array
+      const voiceProto = (win as any).SpeechSynthesisVoice?.prototype
+      const getLang = voiceProto && getOwnPropertyDescriptor(voiceProto, 'lang')?.get
+      const getLocalService = voiceProto && getOwnPropertyDescriptor(voiceProto, 'localService')?.get
+
       useProxy(proto, 'getVoices', {
         apply(target, thisArg: SpeechSynthesis, args: any) {
           notify('strong.speech')
-          const voices: SpeechSynthesisVoice[] = Reflect.apply(target, thisArg, args)
-          return isDisabled ? voices.slice(0, 0) : voices.filter((v) => !isCjkLocalVoice(v))
+          const voices: SpeechSynthesisVoice[] = apply(target, thisArg, args)
+          const res = new RealmArray()
+          if (isDisabled) return res;
+          for (let i = 0; i < voices.length; i++) {
+            const v = voices[i]
+            const info: { lang?: string, localService?: boolean } = nullObject()
+            info.lang = getLang ? apply(getLang, v, []) : undefined
+            info.localService = getLocalService ? apply(getLocalService, v, []) : undefined
+            if (!isCjkLocalVoice(info)) res[res.length] = v
+          }
+          return res
         }
       })
     }
@@ -1351,13 +1809,16 @@ export const hookTasks: HookTask[] = [
 
       /* 拒绝访问 */
       if (conf.fp.other.battery.type === HookType.disabled) {
+        const RealmPromise = win.Promise
+        const promiseReject = RealmPromise.reject
+        const RealmDOMException = win.DOMException
         useProxy(navProto, 'getBattery', {
           apply() {
             notify('weak.battery')
-            return win.Promise.reject(new win.DOMException(
+            return apply(promiseReject, RealmPromise, [construct(RealmDOMException, [
               "Failed to execute 'getBattery' on 'Navigator': Access to the feature \"battery\" is disallowed by permissions policy.",
               'NotAllowedError',
-            ))
+            ])])
           }
         })
         return;
@@ -1366,13 +1827,12 @@ export const hookTasks: HookTask[] = [
       /* 伪装为接通电源的台式机 */
       const proto = (win as any).BatteryManager?.prototype
       if (!proto) return;
-      const values: Record<string, boolean | number> = {
-        charging: true,
-        chargingTime: 0,
-        dischargingTime: Infinity,
-        level: 1,
-      }
-      useGetterProxy(proto, Object.keys(values), (key: string) => ({
+      const values: Record<string, boolean | number> = nullObject()
+      values.charging = true
+      values.chargingTime = 0
+      values.dischargingTime = Infinity
+      values.level = 1
+      useGetterProxy(proto, ['charging', 'chargingTime', 'dischargingTime', 'level'], (key: string) => ({
         apply() {
           notify('weak.battery')
           return values[key]
@@ -1385,58 +1845,69 @@ export const hookTasks: HookTask[] = [
    * .ownProperties
    */
   {
-    onEnable: ({ gthis, symbol, useProxy }) => {
-      const symbolSet = new Set(Object.values(symbol))
+    onEnable: ({ gthis, symbol, disown, useProxy }) => {
+      /*
+       * 内部 symbol 与被隐藏的属性：按下标遍历、经 WeakMap 查找，结果数组由本 realm 的 Array 构造，
+       * 页面改写 Array.prototype.filter、Set.prototype.has 等也读不到被隐藏的键
+       */
+      const hiddenSymbols: symbol[] = symbol.winKey ? [symbol.raw, symbol.winKey] : [symbol.raw]
+      const RealmArray = gthis.Array
+
+      const isHiddenSymbol = (v: unknown) => {
+        for (let i = 0; i < hiddenSymbols.length; i++) {
+          if (hiddenSymbols[i] === v) return true
+        }
+        return false
+      }
+
+      const entryOf = (obj: any): DisownEntry | undefined => (
+        obj != null && (typeof obj === 'object' || typeof obj === 'function') ? weakMapGet(disown, obj) : undefined
+      )
+
+      const isHiddenKey = (entry: DisownEntry | undefined, key: unknown) => {
+        if (typeof key === 'symbol') return isHiddenSymbol(key)
+        return !!entry && (typeof key === 'string' || typeof key === 'number') && entry.has[key] === true
+      }
+
+      /* 没有需要隐藏的键时直接返回原生结果 */
+      const filterKeys = (res: any, obj: any) => {
+        if (!res) return res
+        const entry = entryOf(obj)
+        let found = false
+        for (let i = 0; i < res.length; i++) {
+          if (isHiddenKey(entry, res[i])) {
+            found = true
+            break
+          }
+        }
+        if (!found) return res
+        const out = new RealmArray()
+        for (let i = 0; i < res.length; i++) {
+          if (!isHiddenKey(entry, res[i])) out[out.length] = res[i]
+        }
+        return out
+      }
 
       {
-        useProxy(gthis.Object, 'getOwnPropertyNames', {
-          apply(target, thisArg, args) {
-            const res = Reflect.apply(target, thisArg, args) as string[];
-            if (res) {
-              const disown = args[0]?.[symbol.disown];
-              if (disown && disown instanceof Set) {
-                return res.filter((v) => !disown.has(v));
-              }
-            }
-            return res;
+        const keysHandler = {
+          apply(target: any, thisArg: any, args: any[]) {
+            return filterKeys(apply(target, thisArg, args), args[0])
           }
-        });
+        }
+        useProxy(gthis.Object, 'getOwnPropertyNames', keysHandler);
+        useProxy(gthis.Object, 'getOwnPropertySymbols', keysHandler);
+        useProxy(gthis.Reflect, 'ownKeys', keysHandler);
 
         useProxy(gthis.Object, 'getOwnPropertyDescriptors', {
           apply(target, thisArg, args) {
-            const res = Reflect.apply(target, thisArg, args);
+            const res = apply(target, thisArg, args);
             if (res) {
-              for (let v of symbolSet) {
-                delete res[v];
+              for (let i = 0; i < hiddenSymbols.length; i++) {
+                delete res[hiddenSymbols[i]];
               }
-
-              const disown = args[0]?.[symbol.disown];
-              if (disown && disown instanceof Set) {
-                for (let v of disown) {
-                  delete res[v];
-                }
-              }
-            }
-            return res;
-          }
-        });
-
-        useProxy(gthis.Object, 'getOwnPropertySymbols', {
-          apply(target, thisArg, args) {
-            const res = Reflect.apply(target, thisArg, args) as symbol[];
-            return res?.filter((v) => !symbolSet.has(v));
-          }
-        });
-
-        useProxy(gthis.Reflect, 'ownKeys', {
-          apply(target, thisArg, args) {
-            const res = Reflect.apply(target, thisArg, args) as (string | symbol)[];
-            if (res) {
-              const disown = args[0]?.[symbol.disown];
-              if (disown && disown instanceof Set) {
-                return res.filter((v) => typeof v === 'symbol' ? !symbolSet.has(v) : !disown.has(v));
-              } else {
-                return res.filter((v: any) => !symbolSet.has(v));
+              const entry = entryOf(args[0])
+              for (let i = 0; entry && i < entry.keys.length; i++) {
+                delete res[entry.keys[i]];
               }
             }
             return res;
@@ -1449,14 +1920,8 @@ export const hookTasks: HookTask[] = [
           apply(target: any, thisArg: any, args: any[]) {
             const obj = args[0];
             const key = args[1];
-            if (key != null && typeof obj === 'object') {
-              if (symbolSet.has(key)) return undefined;
-              const disown = obj[symbol.disown];
-              if (disown && disown instanceof Set) {
-                if (disown.has(key)) return undefined;
-              }
-            }
-            return Reflect.apply(target, thisArg, args);
+            if (key != null && isHiddenKey(entryOf(obj), key)) return undefined;
+            return apply(target, thisArg, args);
           }
         }
         useProxy(gthis.Object, 'getOwnPropertyDescriptor', handler)
@@ -1469,18 +1934,21 @@ export const hookTasks: HookTask[] = [
    * .setPrototypeOf
    */
   {
-    onEnable: ({ gthis, symbol, hasRaw, useProxy }) => {
+    onEnable: ({ gthis, isReg, reflectMark, useProxy }) => {
       useProxy(gthis.Reflect, 'setPrototypeOf', {
         apply(target: any, self: any, args: any[]) {
           const src = args[0]
           const dst = args[1]
-          if (hasRaw(src) && dst != null) {
-            dst[symbol.reflect] = true
-            const res = Reflect.apply(target, self, args);
-            delete dst[symbol.reflect]
-            return res;
+          /* 标记经由 Reflect 调用：代理的 setPrototypeOf 陷阱据此返回 false 而不是抛错（与原生一致） */
+          if (isReg(src) && dst != null && (typeof dst === 'object' || typeof dst === 'function')) {
+            weakSetAdd(reflectMark, dst)
+            try {
+              return apply(target, self, args);
+            } finally {
+              weakSetDelete(reflectMark, dst)
+            }
           }
-          return Reflect.apply(target, self, args);
+          return apply(target, self, args);
         }
       })
     }
@@ -1490,7 +1958,7 @@ export const hookTasks: HookTask[] = [
    * .toString
    */
   {
-    onEnable: ({ gthis, info, myProxy, otherProxy, useRaw, useProxy }) => {
+    onEnable: ({ gthis, info, isReg, otherProxy, useRaw, useProxy }) => {
       function isRealFunction(obj: any) {
         const target = Function.prototype.toString
         let proto = obj;
@@ -1506,11 +1974,11 @@ export const hookTasks: HookTask[] = [
       useProxy(gthis.Function.prototype, 'toString', {
         apply(target: any, self: any, args: any[]) {
           try {
-            if (self != null && myProxy.has(self)) {
+            if (self != null && isReg(self)) {
               const raw = useRaw(self);
-              if (raw) return Reflect.apply(target, raw, args);
+              if (raw) return apply(target, raw, args);
             }
-            return Reflect.apply(target, self, args);
+            return apply(target, self, args);
           } catch (e: any) {
             // 堆栈伪造
             if (info.browser !== 'firefox' && e && typeof e.stack === 'string') {

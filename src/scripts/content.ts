@@ -38,30 +38,37 @@ const snedBadgeInfo = debounce(() => {
 })
 
 /**
- * 同页消息处理
+ * 核心脚本的通知
+ * 事件名每次浏览器会话随机生成（见 background/storage.ts），页面不知道事件名，无法监听或伪造
+ * detail 格式：`fp|{json}` 或 `iframe|{json}`
  */
-window.addEventListener('message', ((ev) => {
-  const msg = ev?.data?.__myfp__;
-  switch (msg?.type) {
-    case 'notice.push.fp': {
-      const { data } = msg
-      if (!data) return;
-      for (const src of Object.keys(data)) {
-        fpNoticePool[src] = (fpNoticePool[src] ?? 0) + data[src]
-      }
-      snedBadgeInfo()
-      break
+chrome.storage.local.get('channel').then(({ channel }) => {
+  const id = (channel as StorageChannel | undefined)?.id
+  if (!id) return;
+  window.addEventListener(id, (ev) => {
+    const detail = (ev as CustomEvent).detail
+    if (typeof detail !== 'string') return;
+    const i = detail.indexOf('|')
+    if (i === -1) return;
+
+    const kind = detail.slice(0, i)
+    const pool = kind === 'fp' ? fpNoticePool : kind === 'iframe' ? iframeNoticePool : undefined
+    if (!pool) return;
+
+    let data: Record<string, unknown>
+    try {
+      data = JSON.parse(detail.slice(i + 1))
+    } catch (_) {
+      return
     }
-    case 'notice.push.iframe': {
-      const { data } = msg
-      if (!data) return;
-      for (const src of Object.keys(data)) {
-        iframeNoticePool[src] = (iframeNoticePool[src] ?? 0) + data[src]
-      }
-      break
+    if (!data || typeof data !== 'object') return;
+    for (const src of Object.keys(data)) {
+      const n = data[src]
+      if (typeof n === 'number') pool[src] = (pool[src] ?? 0) + n
     }
-  }
-}) as WindowMessage.Listener)
+    if (kind === 'fp') snedBadgeInfo()
+  })
+}).catch(() => { })
 
 /**
  * runtime消息处理

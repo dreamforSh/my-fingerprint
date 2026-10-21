@@ -1,7 +1,38 @@
 /**
  * 中文环境探测防护
  * 纯函数模块，不依赖运行环境，便于单元测试
+ *
+ * 运行时处理页面传入的文本：只使用模块加载（注入）时缓存的原生方法，
+ * 页面改写 String / RegExp / Array / Set 的原型方法也无法让判断失效
  */
+
+const apply = Reflect.apply
+const uncurryThis = (fn: Function) => (self: any, ...args: any[]): any => apply(fn, self, args)
+const regExec = uncurryThis(RegExp.prototype.exec) as (re: RegExp, s: string) => RegExpExecArray | null
+const strSlice = uncurryThis(String.prototype.slice) as (s: string, start?: number, end?: number) => string
+const strToLowerCase = uncurryThis(String.prototype.toLowerCase) as (s: string) => string
+const setHas = uncurryThis(Set.prototype.has) as (set: Set<string>, v: string) => boolean
+
+/**
+ * 按正则替换全部匹配（正则需带 g 标志）
+ */
+const replaceAll = (text: string, re: RegExp, to: string) => {
+  let res = ''
+  let last = 0
+  re.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = regExec(re, text)) !== null) {
+    res += strSlice(text, last, m.index) + to
+    last = m.index + m[0].length
+    if (m[0].length === 0) re.lastIndex++
+  }
+  return res + strSlice(text, last)
+}
+
+const TRIM_RE = /^\s*([\s\S]*?)\s*$/
+const trim = (text: string) => regExec(TRIM_RE, text)![1]
+
+const startsWith = (s: string, prefix: string) => strSlice(s, 0, prefix.length) === prefix
 
 /**
  * 汉字、注音、假名、CJK 符号与标点、全角字符
@@ -17,12 +48,12 @@ const CJK_ALL = new RegExp(`[${CJK_RANGES}]`, 'gu')
  */
 export const CJK_MASK_CHAR = '͸'
 
-export const hasCjk = (text: string) => CJK_TEST.test(text)
+export const hasCjk = (text: string) => regExec(CJK_TEST, text) !== null
 
 /**
  * 将文本中的中日文字符替换为缺字字符
  */
-export const maskCjk = (text: string) => text.replace(CJK_ALL, CJK_MASK_CHAR)
+export const maskCjk = (text: string) => replaceAll(text, CJK_ALL, CJK_MASK_CHAR)
 
 /**
  * 中文字体（小写，空白已归一）
@@ -58,12 +89,21 @@ const CJK_FONT_PREFIXES = [
 /**
  * 是否是中文字体族名
  */
+const QUOTED_RE = /^(["'])(.*)\1$/
+const SPACES_RE = /\s+/g
+
 export const isCjkFontFamily = (family: string) => {
-  const name = family.trim().replace(/^(["'])(.*)\1$/, '$2').replace(/\s+/g, ' ').toLowerCase()
+  let name = trim(family)
+  const quoted = regExec(QUOTED_RE, name)
+  if (quoted) name = quoted[2]
+  name = strToLowerCase(replaceAll(name, SPACES_RE, ' '))
   if (!name) return false
   if (hasCjk(name)) return true
-  if (CJK_FONT_NAMES.has(name)) return true
-  return CJK_FONT_PREFIXES.some((v) => name.startsWith(v))
+  if (setHas(CJK_FONT_NAMES, name)) return true
+  for (let i = 0; i < CJK_FONT_PREFIXES.length; i++) {
+    if (startsWith(name, CJK_FONT_PREFIXES[i])) return true
+  }
+  return false
 }
 
 /**
@@ -73,19 +113,20 @@ const splitFamilies = (value: string) => {
   const parts: string[] = []
   let buf = ''
   let quote = ''
-  for (const ch of value) {
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i]
     if (quote) {
       if (ch === quote) quote = ''
     } else if (ch === '"' || ch === "'") {
       quote = ch
     } else if (ch === ',') {
-      parts.push(buf)
+      parts[parts.length] = buf
       buf = ''
       continue
     }
     buf += ch
   }
-  parts.push(buf)
+  parts[parts.length] = buf
   return parts
 }
 
@@ -95,11 +136,17 @@ const splitFamilies = (value: string) => {
 const FONT_PREFIX_RE = /^(.*?(?:^|\s)(?:[+-]?(?:\d+\.?\d*|\.\d+)(?:px|pt|pc|em|rem|ex|ch|vw|vh|vmin|vmax|cm|mm|in|q|%)|xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|larger|smaller)(?:\s*\/\s*\S+)?\s+)(\S.*)$/i
 
 const parseFont = (font: string) => {
-  const m = font.match(FONT_PREFIX_RE)
+  const m = regExec(FONT_PREFIX_RE, font)
   if (!m) return;
+  const parts = splitFamilies(m[2])
+  const families: string[] = []
+  for (let i = 0; i < parts.length; i++) {
+    const v = trim(parts[i])
+    if (v) families[families.length] = v
+  }
   return {
     prefix: m[1],
-    families: splitFamilies(m[2]).map((v) => v.trim()).filter(Boolean),
+    families,
   }
 }
 
@@ -107,7 +154,11 @@ const parseFont = (font: string) => {
  * font 简写中是否包含中文字体族
  */
 export const hasCjkFontFamily = (font: string) => {
-  return parseFont(font)?.families.some(isCjkFontFamily) ?? false
+  const families = parseFont(font)?.families
+  for (let i = 0; families && i < families.length; i++) {
+    if (isCjkFontFamily(families[i])) return true
+  }
+  return false
 }
 
 /**
@@ -119,15 +170,24 @@ export const stripCjkFontFamilies = (font: string, placeholder: string) => {
   const parsed = parseFont(font)
   if (!parsed) return;
 
-  const kept = parsed.families.filter((v) => !isCjkFontFamily(v))
-  if (kept.length === parsed.families.length) return;
+  let res = ''
+  let kept = 0
+  for (let i = 0; i < parsed.families.length; i++) {
+    const v = parsed.families[i]
+    if (isCjkFontFamily(v)) continue
+    res += v + ', '
+    kept++
+  }
+  if (kept === parsed.families.length) return;
 
-  return parsed.prefix + [...kept, placeholder].join(', ')
+  return parsed.prefix + res + placeholder
 }
+
+const CJK_LANG_RE = /^(zh|yue|cmn|wuu|hak|nan|lzh|gan|hsn)([-_]|$)/i
 
 /**
  * 是否是中文本地语音（如 Windows 中文语言包提供的语音）
  */
 export const isCjkLocalVoice = (voice: { lang?: string, localService?: boolean }) => {
-  return !!voice.localService && /^(zh|yue|cmn|wuu|hak|nan|lzh|gan|hsn)([-_]|$)/i.test(voice.lang ?? '')
+  return !!voice.localService && regExec(CJK_LANG_RE, voice.lang ?? '') !== null
 }

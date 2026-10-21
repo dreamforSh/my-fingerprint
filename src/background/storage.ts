@@ -33,6 +33,19 @@ const markSessionInited = async (): Promise<boolean> => {
   return true
 }
 
+const randomHex = (bytes: number) => {
+  const arr = crypto.getRandomValues(new Uint8Array(bytes))
+  return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * 生成核心脚本的通信标识
+ */
+const genChannel = (): StorageChannel => ({
+  id: 'e' + randomHex(12),
+  secret: randomHex(16),
+})
+
 /**
  * 生成默认配置
  */
@@ -41,6 +54,7 @@ export const genDefaultLocalStorage = (): LocalStorage => {
   const sGlobal = genRandomSeed();
   return {
     version: manifest.version,
+    channel: genChannel(),
     profiles: [],
     config: {
       enable: true,
@@ -188,11 +202,14 @@ export const initLocalStorage = sharedAsync(async () => {
     },
   }
 
-  /** 刷新浏览器种子：仅在浏览器会话内首次初始化时刷新，Service Worker 被回收后重启沿用原值 */
+  /**
+   * 刷新浏览器种子与通信标识：仅在浏览器会话内首次初始化时刷新，Service Worker 被回收后重启沿用原值
+   */
   const isSessionStart = await markSessionInited()
   if (isSessionStart) {
     _storage.config.seed.browser = genRandomSeed()
   }
+  _storage.channel = (!isSessionStart && _curr.channel?.id && _curr.channel?.secret) ? _curr.channel : _default.channel
 
   /** 更新日志等级 */
   logManager.setLevel(_storage.config.prefs.logLevel)
