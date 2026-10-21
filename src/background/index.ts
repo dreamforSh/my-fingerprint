@@ -150,20 +150,14 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     // 兼容模式注入，内部判断是否需要注入
     injectScript(tabId, storage)
 
-    const _url = tab.url ? tryUrl(tab.url) : undefined
-    if (!_url?.hostname) return;
+    const hostname = (tab.url ? tryUrl(tab.url) : undefined)?.hostname
 
-    if (storage.policies.isBlacklistMode) {
-      if (existParentDomain(storage.policies.blacklist, _url.hostname)) {
-        logger.debug('in blacklist mode', _url.hostname);
-        reRequestHeader(undefined, tabId)
-      }
-    } else {
-      if (existParentDomain(storage.policies.whitelist, _url.hostname)) {
-        logger.debug('in whitelist mode', _url.hostname);
-        reRequestHeader(tabId)
-        setBadgeWhitelist(tabId)
-      }
+    // 进入或离开名单内的站点时，更新请求头的标签页列表
+    reRequestHeader({ id: tabId, hostname })
+
+    if (hostname && !storage.policies.isBlacklistMode && existParentDomain(storage.policies.whitelist, hostname)) {
+      logger.debug('in whitelist mode', hostname);
+      setBadgeWhitelist(tabId)
     }
   }
 });
@@ -172,7 +166,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
  * 监听tab关闭
  */
 chrome.tabs.onRemoved.addListener((tabId) => {
-  reRequestHeader(undefined, tabId)
+  reRequestHeader({ id: tabId })
   removeBadge(tabId)
 })
 

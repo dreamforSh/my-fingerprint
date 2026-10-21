@@ -4,6 +4,7 @@ import { isDefaultMode } from "@/utils/storage"
 import { logManager } from '@/utils/log';
 import { getBrowserInfo } from "@/utils/browser";
 import { CF_CHALLENGE_HOSTS } from "@/core/cloudflare";
+import { existParentDomain } from "@/utils/base";
 
 const logger = logManager.createLogger(__LOG_PREFIX_FILE_PATH__);
 
@@ -132,14 +133,31 @@ const removeRules = async () => {
   }).catch(() => { })
 }
 
+type TabState = {
+  id: number
+  /** 顶层页面的主机名，为空表示标签页已关闭或页面没有主机名 */
+  hostname?: string
+}
+
+let queue: Promise<unknown> = Promise.resolve()
+
 /**
  * 刷新请求头
+ * @param tab 发生导航或被关闭的标签页，用于维护标签页级别的生效/排除列表
  */
-export const reRequestHeader = async (excludeTabId?: number, includeTabId?: number) => {
+export const reRequestHeader = (tab?: TabState) => {
+  /* 串行执行，避免并发读写 SessionRules 时丢失标签页 */
+  const task = queue.then(() => updateRules(tab))
+  queue = task.catch(() => { })
+  return task
+}
+
+const updateRules = async (tab?: TabState) => {
   const { storage } = await getLocalStorage()
 
+  /* 不改写请求头时，规则已在配置变化时删除，标签页变化无需处理 */
   if (!storage.config.enable || !isHookNetRequest(storage)) {
-    return await removeRules()
+    return tab ? undefined : await removeRules()
   }
 
   /* 构建 Rules */
@@ -151,41 +169,45 @@ export const reRequestHeader = async (excludeTabId?: number, includeTabId?: numb
   ]
 
   if (!rules || rules.length === 0) {
-    return await removeRules()
+    return tab ? undefined : await removeRules()
   }
 
   const srs = await chrome.declarativeNetRequest.getSessionRules()
   const prev = srs.find(r => r.id === UA_NET_RULE_ID)
 
+  const { isBlacklistMode, blacklist, whitelist } = storage.policies
+
+  /**
+   * 标签页列表：顶层页面命中名单的标签页整体生效（黑名单）或排除（白名单），与脚本注入的判断一致
+   * 标签页离开名单内的站点或被关闭时移除
+   */
+  const tabIds = new Set(isBlacklistMode ? prev?.condition?.tabIds : prev?.condition?.excludedTabIds);
+  if (tab) {
+    const hit = !!tab.hostname && existParentDomain(isBlacklistMode ? blacklist : whitelist, tab.hostname)
+    if (hit === tabIds.has(tab.id)) return;
+    hit ? tabIds.add(tab.id) : tabIds.delete(tab.id)
+  }
+
   /* 构建 Condition */
   let condition: chrome.declarativeNetRequest.RuleCondition;
   const resourceTypes = Object.values(chrome.declarativeNetRequest.ResourceType)
 
-  if (storage.policies.isBlacklistMode) {
-    /* 黑名单模式 */
-    const set = new Set(prev?.condition?.tabIds);
-    if (includeTabId != null) {
-      set.add(includeTabId);
+  if (isBlacklistMode) {
+    /* 黑名单模式：没有命中黑名单的标签页时无需改写 */
+    if (blacklist.length === 0 || tabIds.size === 0) {
+      return await removeRules()
     }
     condition = {
       resourceTypes,
-      initiatorDomains: storage.policies.blacklist.length > 0 ? [...storage.policies.blacklist] : undefined,
-      tabIds: set.size > 0 ? [...set] : undefined,
-    }
-    // 黑名单模式下，如果没有任何条件，则删除规则
-    if (!condition.initiatorDomains && !condition.tabIds) {
-      return await removeRules()
+      initiatorDomains: [...blacklist],
+      tabIds: [...tabIds],
     }
   } else {
     /* 白名单模式 */
-    const set = new Set(prev?.condition?.excludedTabIds);
-    if (excludeTabId != null) {
-      set.add(excludeTabId);
-    }
     condition = {
       resourceTypes,
-      excludedInitiatorDomains: storage.policies.whitelist.length > 0 ? [...storage.policies.whitelist] : undefined,
-      excludedTabIds: set.size > 0 ? [...set] : undefined,
+      excludedInitiatorDomains: whitelist.length > 0 ? [...whitelist] : undefined,
+      excludedTabIds: tabIds.size > 0 ? [...tabIds] : undefined,
     }
   }
 

@@ -15,6 +15,19 @@ import { hasCjk, hasCjkFontFamily, isCjkLocalVoice, maskCjk, stripCjkFontFamilie
 import { EMOJI_TEXT_MAX_LENGTH, isEmojiProbe } from './emoji';
 import { isCloudflareCaller } from './cloudflare';
 
+/**
+ * getter 返回固定值的代理处理器
+ * 先调用原 getter：this 非法时与原生一致抛出异常（如 Navigator.prototype.userAgent）
+ */
+const valueGetterHandler = (getter: () => any, value: any, notifyKey: string): ProxyHandler<() => any> => ({
+  apply(target, thisArg: any, args: any) {
+    const raw = getter.call(thisArg)
+    if (isCloudflareCaller()) return raw;
+    notify(notifyKey)
+    return value;
+  }
+})
+
 export const hookTasks: HookTask[] = [
   /**
    * iframe html hook
@@ -197,38 +210,26 @@ export const hookTasks: HookTask[] = [
   {
     condition: ({ conf, isDefault }) => !isDefault(Object.values(conf.fp.navigator)),
     onEnable: (ctx) => {
-      const { gthis, conf, useDisownKeys, useHookMode, useGetterProxy } = ctx;
+      const { gthis, conf, useHookMode, useGetterProxy } = ctx;
       const fps = conf.fp.navigator;
 
-      useDisownKeys(gthis.navigator, [
-        'userAgent', 'appVersion', 'platform', 'userAgentData' as any, 'language', 'languages', 'hardwareConcurrency',
-        'deviceMemory' as any,
-      ]);
-
+      /* 改写原型上的 getter：实例上不产生自有属性，原型 getter 也无法绕过 */
       const prototype = (gthis.Navigator ?? gthis.WorkerNavigator).prototype;
 
       /* userAgent & userAgentData */
       const uaInfo = useHookMode(fps.clientHints).value;
       if (uaInfo != null) {
         if (uaInfo.ua != null) {
-          useGetterProxy([prototype, gthis.navigator], [
+          useGetterProxy(prototype, [
             'userAgent', 'appVersion', 'platform',
           ], (key, getter) => {
             const value = uaInfo.ua[key]
             if (value == null) return;
-            return {
-              apply(target, thisArg: Navigator, args: any) {
-                if (isCloudflareCaller()) {
-                  return getter.call(thisArg);
-                }
-                notify('weak.' + key)
-                return value;
-              }
-            }
+            return valueGetterHandler(getter, value, 'weak.' + key)
           })
         }
         if (uaInfo.uaData != null) {
-          useGetterProxy([prototype, gthis.navigator], ('userAgentData' as any), (_, getter) => ({
+          useGetterProxy(prototype, ('userAgentData' as any), (_, getter) => ({
             apply(target, thisArg: Navigator, args: any) {
               if (isCloudflareCaller()) {
                 return getter.call(thisArg);
@@ -242,33 +243,19 @@ export const hookTasks: HookTask[] = [
       }
 
       /* other */
-      useGetterProxy([prototype, gthis.navigator], [
+      useGetterProxy(prototype, [
         'languages', 'hardwareConcurrency', 'deviceMemory' as keyof Navigator,
       ], (key, getter) => {
         const value: any = useHookMode(fps[key as keyof typeof fps] as any).value
         if (value == null) return;
-        return {
-          apply(target, thisArg: Navigator, args: any) {
-            if (isCloudflareCaller()) {
-              return getter.call(thisArg);
-            }
-            notify('weak.' + key)
-            return value;
-          }
-        }
+        return valueGetterHandler(getter, value, 'weak.' + key)
       })
 
       {
         const value = useHookMode(fps.languages).value?.[0]
-        value != null && useGetterProxy([prototype, gthis.navigator], 'language', (_, getter) => ({
-          apply(target, thisArg: Navigator, args: any) {
-            if (isCloudflareCaller()) {
-              return getter.call(thisArg);
-            }
-            notify('weak.languages')
-            return value;
-          }
-        }))
+        value != null && useGetterProxy(prototype, 'language', (_, getter) => (
+          valueGetterHandler(getter, value, 'weak.languages')
+        ))
       }
     },
   },
@@ -278,15 +265,11 @@ export const hookTasks: HookTask[] = [
    */
   {
     condition: ({ conf, isDefault }) => !isDefault(Object.values(conf.fp.screen)),
-    onEnable: ({ win, conf, useDisownKeys, useHookMode, useGetterProxy }) => {
+    onEnable: ({ win, conf, useHookMode, useGetterProxy }) => {
       if (!win) return;
 
       const fps = conf.fp.screen;
       const ws = win.screen;
-
-      useDisownKeys(win.screen, [
-        'colorDepth', 'pixelDepth', 'width', 'height', 'availWidth', 'availHeight',
-      ]);
 
       /* Screen Depth */
       const depth = useHookMode(fps.depth).value
@@ -295,20 +278,12 @@ export const hookTasks: HookTask[] = [
           'colorDepth': depth.colorDepth ?? depth.color,
           'pixelDepth': depth.pixelDepth ?? depth.pixel,
         }
-        useGetterProxy([win.Screen.prototype, win.screen],
+        useGetterProxy(win.Screen.prototype,
           Object.keys(tasks) as (keyof Screen)[],
           (key, getter) => {
             const num = tasks[key]
             if (num == null) return;
-            return {
-              apply(target, thisArg: Screen, args: any) {
-                if (isCloudflareCaller()) {
-                  return getter.call(thisArg);
-                }
-                notify('weak.' + key)
-                return num;
-              }
-            }
+            return valueGetterHandler(getter, num, 'weak.' + key)
           });
       }
 
@@ -324,20 +299,12 @@ export const hookTasks: HookTask[] = [
           if (size.width != null) size.availWidth = size.width - (ws.width - ws.availWidth);
           if (size.height != null) size.availHeight = size.height - (ws.height - ws.availHeight);
 
-          useGetterProxy([win.Screen.prototype, ws], [
+          useGetterProxy(win.Screen.prototype, [
             'width', 'height', 'availWidth', 'availHeight'
           ], (key, getter) => {
             const num = size[key]
             if (num == null) return;
-            return {
-              apply(target, thisArg: Screen, args: any) {
-                if (isCloudflareCaller()) {
-                  return getter.call(thisArg);
-                }
-                notify('weak.' + key)
-                return num;
-              }
-            }
+            return valueGetterHandler(getter, num, 'weak.' + key)
           })
         }
       }
@@ -1523,7 +1490,7 @@ export const hookTasks: HookTask[] = [
    * .toString
    */
   {
-    onEnable: ({ gthis, info, symbol, myProxy, otherProxy, useProxy }) => {
+    onEnable: ({ gthis, info, myProxy, otherProxy, useRaw, useProxy }) => {
       function isRealFunction(obj: any) {
         const target = Function.prototype.toString
         let proto = obj;
@@ -1535,22 +1502,24 @@ export const hookTasks: HookTask[] = [
         return false;
       }
 
+      /* toString 自身也是已注册的代理，经 useRaw 取到原生函数，无需特殊处理 */
       useProxy(gthis.Function.prototype, 'toString', {
         apply(target: any, self: any, args: any[]) {
           try {
             if (self != null && myProxy.has(self)) {
-              const raw = self[symbol.raw]
+              const raw = useRaw(self);
               if (raw) return Reflect.apply(target, raw, args);
             }
             return Reflect.apply(target, self, args);
           } catch (e: any) {
             // 堆栈伪造
-            if (info.browser !== 'firefox') {
+            if (info.browser !== 'firefox' && e && typeof e.stack === 'string') {
               const es = e.stack.split('\n')
               if (isRealFunction(self)) {
                 es[1] = es[1].replace('Object', 'Function')
               }
-              es.splice(2, 1);
+              const applyIdx = es.findIndex((l: string, idx: number) => idx > 0 && l.includes('apply'));
+              es.splice(applyIdx !== -1 ? applyIdx : 2, 1);
               e.stack = es.join('\n');
             }
             throw e;
