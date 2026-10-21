@@ -7,6 +7,7 @@ import {
   drawNoiseTo2d,
   findIframes,
   getCanvas2d,
+  markCanvasContext,
   nodeNameOf,
   charDataGet,
   charDataSubstring,
@@ -22,6 +23,9 @@ import {
   toUint32,
   typedArrayLength,
   hookTextMetrics,
+  layoutUnitOf,
+  makeRectScope,
+  shiftLayout,
   randomCanvasNoise,
   randomFontNoise, randomScreenSize
 } from './utils';
@@ -32,14 +36,17 @@ import { isCloudflareCaller } from './cloudflare';
 import { addFragColorOffset, fragmentOutputs } from './glsl';
 import { adapterInfoOf } from './gpu';
 import { isRestrictiveForWorkers } from './csp';
+import { isLocalDateString } from './date';
+import { rewriteMediaQuery } from './media';
 import {
   ITERATOR, NativeMap, NativeSet, NativeWeakMap, NativeWeakSet, SET_METHODS, apply, bind, construct, defineProperty,
-  floor, getOwnPropertyDescriptor, getPrototypeOf, hasOwn, isArray, isBinaryData, mapDelete, mapGet, mapSet, nullObject, numIsNaN,
-  numParseFloat, objectCreate, objectFreeze, promiseThen, reflectGet, regExec, setAdd, setHas, strIndexOf, strSlice, stringify,
+  floor, getOwnPropertyDescriptor, getOwnPropertyNames, getPrototypeOf, hasOwn, isArray, isBinaryData, mapDelete, mapGet, mapSet, nullObject,
+  objectCreate, objectFreeze, promiseThen, reflectDeleteProperty, reflectGet, regExec, setAdd, setHas, strIndexOf, strSlice, stringify,
   strToLowerCase, typedArrayName, uncurryThis, weakMapGet, weakMapSet, weakSetAdd, weakSetDelete, weakSetHas,
 } from './intrinsics';
 
 const numToFixed = uncurryThis(Number.prototype.toFixed) as (n: number, digits: number) => string
+const TO_STRING_TAG: typeof Symbol.toStringTag = Symbol.toStringTag
 const blobSize = typeof Blob === 'undefined' ? undefined : getOwnPropertyDescriptor(Blob.prototype, 'size')?.get
 
 /**
@@ -652,8 +659,14 @@ export const hookTasks: HookTask[] = [
       useGetterProxy(prototype, [
         'languages', 'hardwareConcurrency', 'deviceMemory' as keyof Navigator,
       ], (key, getter) => {
-        const value: any = useHookMode(fps[key as keyof typeof fps] as any).value
+        let value: any = useHookMode(fps[key as keyof typeof fps] as any).value
         if (value == null) return;
+        /* 与原生一致：本窗口的冻结数组，每次读取返回同一对象 */
+        if (key === 'languages' && isArray(value)) {
+          const list = new gthis.Array()
+          for (let i = 0; i < value.length; i++) list[i] = value[i]
+          value = objectFreeze(list)
+        }
         return valueGetterHandler(getter, value, 'weak.' + key)
       })
 
@@ -671,11 +684,13 @@ export const hookTasks: HookTask[] = [
    */
   {
     condition: ({ conf: { fp: { screen: s } }, isDefault }) => !isDefault([s.size, s.depth]),
-    onEnable: ({ win, conf, useHookMode, useGetterProxy }) => {
+    onEnable: ({ win, conf, useHookMode, useGetterProxy, useProxy }) => {
       if (!win) return;
 
       const fps = conf.fp.screen;
       const ws = win.screen;
+      /* 钩取前读取真实尺寸 */
+      const realSize = { width: ws.width, height: ws.height }
 
       /* Screen Depth */
       const depth = useHookMode(fps.depth).value
@@ -712,6 +727,47 @@ export const hookTasks: HookTask[] = [
             if (num == null) return;
             return valueGetterHandler(getter, num, 'weak.' + key)
           })
+
+          /*
+           * matchMedia：device-width / device-height / device-aspect-ratio 按伪装尺寸求值
+           * 先由原生方法转换参数（报错与原生一致），按其规范化的查询改写后重新求值；
+           * media 读取到的仍是页面查询的规范化结果。样式表中的 @media 不经过这里，无法处理
+           */
+          const spoofSize = { width: size.width ?? realSize.width, height: size.height ?? realSize.height }
+          const mediaGetter = win.MediaQueryList && getOwnPropertyDescriptor(win.MediaQueryList.prototype, 'media')?.get
+          if (mediaGetter && typeof win.matchMedia === 'function') {
+            const originals = new NativeWeakMap<object, string>()
+            const originalOf = new NativeMap<string, string>()
+            useProxy(win, 'matchMedia', {
+              apply(target: any, thisArg: any, args: any[]) {
+                const mql = apply(target, thisArg, args)
+                if (isCloudflareCaller()) return mql;
+                const media: string = apply(mediaGetter, mql, [])
+                const rewritten = rewriteMediaQuery(media, realSize, spoofSize)
+                if (rewritten === media) return mql;
+                notify('weak.width')
+                const res: MediaQueryList = apply(target, thisArg, [rewritten])
+                weakMapSet(originals, res, media)
+                mapSet(originalOf, apply(mediaGetter, res, []), media)
+                return res
+              }
+            })
+            useGetterProxy(win.MediaQueryList.prototype, 'media', {
+              apply(target: any, thisArg: any, args: any[]) {
+                const raw = apply(target, thisArg, args)
+                return weakMapGet(originals, thisArg) ?? raw
+              }
+            })
+            /* 改写后的查询变化时，事件中的 media 也还原为页面的查询 */
+            if (win.MediaQueryListEvent) {
+              useGetterProxy(win.MediaQueryListEvent.prototype, 'media', {
+                apply(target: any, thisArg: any, args: any[]) {
+                  const raw = apply(target, thisArg, args)
+                  return (typeof raw === 'string' && mapGet(originalOf, raw)) || raw
+                }
+              })
+            }
+          }
         }
       }
 
@@ -726,16 +782,6 @@ export const hookTasks: HookTask[] = [
     onEnable: (ctx) => {
       const { win, conf, useSeed, useProxy } = ctx;
       if (!win) return;
-
-      /* getContext: 提示浏览器优化频繁读取；不修改调用方传入的对象，避免产生页面可见的副作用 */
-      useProxy(win.HTMLCanvasElement.prototype, 'getContext', {
-        apply: (target, thisArg, args: Parameters<typeof HTMLCanvasElement.prototype.getContext>) => {
-          if (args[0] === '2d') {
-            args[1] = { willReadFrequently: true, ...(args[1] as any) }
-          }
-          return apply(target, thisArg, args);
-        }
-      })
 
       /* getImageData */
       {
@@ -896,6 +942,20 @@ export const hookTasks: HookTask[] = [
       if (win) {
         useProxy(win.HTMLCanvasElement.prototype, ['toDataURL', 'toBlob'], handler);
       }
+
+      /*
+       * getContext：只记录取得过上下文的画布，参数与结果原样传递（不改动上下文属性，
+       * getContextAttributes 与原生一致）。加噪只处理这些画布，不替页面创建上下文
+       */
+      const contextHandler = {
+        apply: (target: Function, thisArg: OffscreenCanvas | HTMLCanvasElement, args: any) => {
+          const res = apply(target, thisArg, args)
+          if (res != null) markCanvasContext(thisArg)
+          return res
+        }
+      }
+      if (gthis.OffscreenCanvas) useProxy(gthis.OffscreenCanvas.prototype, 'getContext', contextHandler);
+      if (win) useProxy(win.HTMLCanvasElement.prototype, 'getContext', contextHandler);
     },
   },
 
@@ -1171,12 +1231,40 @@ export const hookTasks: HookTask[] = [
       const systemOffsetMs = offsetToMs(systemOffsetStr);
       const customOffsetMs = offsetToMs(customOffsetStr);
 
-      const getDiffMs = (time: number) => {
+      const customOffsetAt = (time: number) => {
         const c = customFmt(time);
+        return c ? offsetToMs(c) : customOffsetMs;
+      }
+      const systemOffsetAt = (time: number) => {
         const s = systemFmt(time);
-        const cMs = c ? offsetToMs(c) : customOffsetMs;
-        const sMs = s ? offsetToMs(s) : systemOffsetMs;
-        return cMs - sMs;
+        return s ? offsetToMs(s) : systemOffsetMs;
+      }
+      /**
+       * 墙上时间（以 UTC 表示的本地日期时间）在某时区对应的时刻，与引擎处理夏令时切换的方式一致：
+       * 重叠（回拨）时取较早的时刻；跳过的时间（拨快）按切换前的偏移换算，即顺延到切换之后
+       */
+      const DAY = 86400000
+      const wallToTime = (wall: number, offsetAt: (time: number) => number) => {
+        const before = wall - offsetAt(wall - DAY)
+        const after = wall - offsetAt(wall + DAY)
+        if (before === after) return before;
+        const beforeValid = before + offsetAt(before) === wall
+        const afterValid = after + offsetAt(after) === wall
+        if (beforeValid && afterValid) return before < after ? before : after;
+        if (afterValid) return after;
+        return before;
+      }
+
+      /** 伪装时区下的时刻换算为系统时区下墙上时间相同的时刻（toCustomTime 的逆运算） */
+      const toSystemTime = (customTime: number) => {
+        if (customTime !== customTime) return customTime;
+        return wallToTime(customTime + customOffsetAt(customTime), systemOffsetAt)
+      }
+
+      /** 按系统时区解析的本地时间换算为按伪装时区解析的结果 */
+      const toCustomTime = (systemTime: number) => {
+        if (systemTime !== systemTime) return systemTime;
+        return wallToTime(systemTime + systemOffsetAt(systemTime), customOffsetAt)
       }
 
       const dtFormatter: Intl.DateTimeFormat = construct(_DateTimeFormat, ['en-US', options({
@@ -1227,10 +1315,6 @@ export const hookTasks: HookTask[] = [
         return i === -1 ? s : strSlice(s, 0, i) + strSlice(s, i + 1)
       }
 
-      function isNumeric(v: any) {
-        return !numIsNaN(v) && !numIsNaN(numParseFloat(v));
-      }
-
       /* 在页面指定的语言后追加自定义语言 */
       const useCustomLocales = (locales?: Intl.LocalesArgument) => {
         const res = new RealmArray()
@@ -1279,18 +1363,31 @@ export const hookTasks: HookTask[] = [
       /* Date.prototype.toString 被钩取后的代理，Date() 作为函数调用时使用 */
       let dateToString: Function | undefined
 
+      /*
+       * 按本地时间解析的输入：年月日等分量（两个及以上参数），或按本地时间解析的日期字符串（见 isLocalDateString）。
+       * 参数只由原生构造函数转换一次，页面传入带 valueOf 的对象也只被调用一次
+       */
+      const isLocalInput = (args: any[]) =>
+        args.length >= 2 || (args.length === 1 && typeof args[0] === 'string' && isLocalDateString(args[0]))
+
+      /* Date.parse */
+      useProxy(_Date, 'parse', {
+        apply: (target: any, thisArg: any, args: any[]) => {
+          notify('weak.timezone')
+          const time: number = apply(target, thisArg, args)
+          return typeof args[0] === 'string' && isLocalDateString(args[0]) ? toCustomTime(time) : time
+        }
+      })
+
       /* Date */
       useProxy(gthis, 'Date', {
         construct: (target, args, newTarget) => {
           notify('weak.timezone')
           const raw = construct(target, args, newTarget);
-
-          if ((typeof args[0] === 'string' && strIndexOf(args[0], '/') !== -1) || (args[1] != null && isNumeric(args[1]))) {
-            const time = apply(dateGetTime, raw, [])
-            return construct(target, [time - getDiffMs(time)], newTarget);
-          }
-
-          return raw;
+          if (!isLocalInput(args)) return raw;
+          const time = apply(dateGetTime, raw, [])
+          if (time !== time) return raw;
+          return construct(target, [toCustomTime(time)], newTarget);
         },
         /* 与原生一致：作为函数调用时忽略参数，返回当前时间的字符串 */
         apply: (target, thisArg: Date, args: Parameters<typeof Date>) => {
@@ -1330,8 +1427,14 @@ export const hookTasks: HookTask[] = [
             return task && {
               apply: (target: any, thisArg: Date, args: Parameters<typeof Date.prototype.toString>) => {
                 notify('weak.timezone')
-                /* 以原生 getTime 取时间值：非 Date 时与原生一致抛错，页面也无法经由 Symbol.toPrimitive 干扰换算 */
-                const time = apply(dateGetTime, thisArg, [])
+                /* 以原生 getTime 取时间值，页面无法经由 Symbol.toPrimitive 干扰换算 */
+                let time: number
+                try {
+                  time = apply(dateGetTime, thisArg, [])
+                } catch (_) {
+                  /* 非 Date：由原方法抛错，错误信息与调用栈与原生一致 */
+                  return apply(target, thisArg, args)
+                }
                 const parts = getParts(time)
                 if (parts) {
                   const res = task(parts, time)
@@ -1353,17 +1456,17 @@ export const hookTasks: HookTask[] = [
           apply(target: any, thisArg: Date, args: any[]) {
             notify('weak.timezone');
 
-            const time = apply(dateGetTime, thisArg, [])
-            const diffMs = getDiffMs(time)
-            // to system
-            const localDate = construct(_Date, [time + diffMs]);
-            // set
+            let time: number
+            try {
+              time = apply(dateGetTime, thisArg, [])
+            } catch (_) {
+              /* 非 Date：由原方法抛错（先于参数转换），与原生一致 */
+              return apply(target, thisArg, args)
+            }
+            /* 系统时区下墙上时间与伪装时区相同的日期上修改分量（参数由原生方法转换一次），再换算回来 */
+            const localDate = construct(_Date, [toSystemTime(time)]);
             apply(target, localDate, args);
-            // to custom
-            const timeMs = apply(dateGetTime, localDate, []) - diffMs;
-            apply(dateSetTime, thisArg, [timeMs]);
-
-            return timeMs;
+            return apply(dateSetTime, thisArg, [toCustomTime(apply(dateGetTime, localDate, []))]);
           }
         })
 
@@ -1547,43 +1650,25 @@ export const hookTasks: HookTask[] = [
    */
   {
     condition: ({ conf }) => conf.fp.other.webrtc.type === HookType.disabled,
-    onEnable: ({ win, useDisownKeys, useDefine }) => {
+    onEnable: ({ win }) => {
       if (!win) return;
 
-      {
-        const keys: any = [
-          'mediaDevices', 'getUserMedia', 'mozGetUserMedia', 'webkitGetUserMedia',
-        ]
-        useDisownKeys(win.navigator, keys);
-        useDisownKeys(win.Navigator.prototype, keys);
-        useDefine([win.Navigator.prototype, win.navigator], keys, {
-          value: undefined,
-          enumerable: false,
-        });
-        useDefine(win.Navigator.prototype, keys, {
-          value: undefined,
-          enumerable: false,
-        });
+      /*
+       * 与没有 WebRTC 的浏览器一致：删除接口与方法，而不是设为 undefined（属性仍在，描述符也与原生不同）。
+       * RTC 开头的接口整体删除，避免只剩部分接口；媒体设备相关与非安全上下文中的表现一致。
+       * MediaStream / MediaStreamTrack 保留：所有浏览器都有，Canvas、WebAudio 的捕获流也用到
+       */
+      const RTC = /^(?:webkit|moz)?RTC[A-Z]/
+      const names = getOwnPropertyNames(win)
+      for (let i = 0; i < names.length; i++) {
+        if (regExec(RTC, names[i])) reflectDeleteProperty(win, names[i])
       }
+      const windowKeys = ['MediaDevices', 'MediaDeviceInfo', 'InputDeviceInfo']
+      for (let i = 0; i < windowKeys.length; i++) reflectDeleteProperty(win, windowKeys[i])
 
-      const rtcKeys = [
-        'RTCDataChannel',
-        'RTCIceCandidate',
-        'RTCConfiguration',
-        'MediaStreamTrack',
-        'RTCPeerConnection',
-        'RTCSessionDescription',
-        'mozMediaStreamTrack',
-        'mozRTCPeerConnection',
-        'mozRTCSessionDescription',
-        'webkitMediaStreamTrack',
-        'webkitRTCPeerConnection',
-        'webkitRTCSessionDescription',
-      ]
-      for (let i = 0; i < rtcKeys.length; i++) {
-        // @ts-ignore
-        if (win[rtcKeys[i]]) win[rtcKeys[i]] = undefined;
-      }
+      const proto = win.Navigator?.prototype
+      const navigatorKeys = ['mediaDevices', 'getUserMedia', 'webkitGetUserMedia', 'mozGetUserMedia']
+      for (let i = 0; proto && i < navigatorKeys.length; i++) reflectDeleteProperty(proto, navigatorKeys[i])
     },
   },
 
@@ -1897,57 +1982,53 @@ export const hookTasks: HookTask[] = [
    */
   {
     condition: ({ conf }) => conf.fp.other.domRect.type !== HookType.default,
-    onEnable: ({ win, conf, useSeed, useProxy }) => {
+    onEnable: ({ win, conf, info, useSeed, useProxy }) => {
       if (!win) return;
 
       const seed = useSeed(conf.fp.other.domRect)
       if (seed == null) return;
 
-      const noise = seededRandom(seed, 1e-6, -1e-6);
+      const unit = layoutUnitOf(info.browser)
+      const scope = makeRectScope(win)
 
-      /* 原生 getter / setter 读写：页面改写 DOMRect 原型无法跳过加噪 */
-      const noiseRect = (rect: DOMRect) => {
-        const x = rectGet(rect, 'x')
-        if (x !== 0) rectSet(rect, 'x', x + noise);
+      /*
+       * 宽度移动一个布局单位，方向由种子与原宽度决定：同一文本经元素或 Range 测得的宽度噪音相同。
+       * 只改宽度（right 随之改变，x / left 不变），以原生 getter / setter 读写
+       */
+      const noiseWidth = (rect: DOMRect | undefined) => {
+        if (!rect) return;
         const width = rectGet(rect, 'width')
-        if (width !== 0) rectSet(rect, 'width', width + noise);
+        if (!(width > 0)) return;
+        const k = width <= unit || seededRandom(`${seed}:${width}`) < 0.5 ? 1 : -1
+        rectSet(rect, 'width', shiftLayout(width, k, unit))
       }
 
-      {
-        const handler = {
-          apply(target: () => DOMRect, thisArg: any, args: any) {
-            if (isCloudflareCaller()) {
-              return apply(target, thisArg, args);
-            }
-            notify('strong.domRect')
-            const rect = apply(target, thisArg, args);
-            if (rect) noiseRect(rect);
-            return rect;
-          }
+      const rectHandler = (inScope: (target: any) => boolean) => ({
+        apply(target: () => DOMRect, thisArg: any, args: any) {
+          const rect = apply(target, thisArg, args);
+          if (isCloudflareCaller()) return rect;
+          notify('strong.domRect')
+          if (rect && inScope(thisArg)) noiseWidth(rect);
+          return rect;
         }
-        useProxy(win.Element.prototype, 'getBoundingClientRect', handler)
-        useProxy(win.Range.prototype, 'getBoundingClientRect', handler)
-      }
+      })
 
-      {
-        const handler = {
-          apply(target: () => DOMRectList, thisArg: any, args: any) {
-            if (isCloudflareCaller()) {
-              return apply(target, thisArg, args);
-            }
-            notify('strong.domRect')
-            const rlist = apply(target, thisArg, args);
-            if (rlist) {
-              const len = rectListLength(rlist)
-              for (let i = 0; i < len; i++) {
-                noiseRect(rlist[i]);
-              }
-            }
-            return rlist;
-          }
+      const rectListHandler = (inScope: (target: any, count: number) => boolean) => ({
+        apply(target: () => DOMRectList, thisArg: any, args: any) {
+          const list = apply(target, thisArg, args);
+          if (isCloudflareCaller()) return list;
+          notify('strong.domRect')
+          const len = list ? rectListLength(list) : 0
+          if (len && inScope(thisArg, len)) noiseWidth(list[0]);
+          return list;
         }
-        useProxy(win.Element.prototype, 'getClientRects', handler)
-        useProxy(win.Range.prototype, 'getClientRects', handler)
+      })
+
+      useProxy(win.Element.prototype, 'getBoundingClientRect', rectHandler((el) => scope.element(el)))
+      useProxy(win.Element.prototype, 'getClientRects', rectListHandler((el, n) => scope.element(el, n)))
+      if (win.Range) {
+        useProxy(win.Range.prototype, 'getBoundingClientRect', rectHandler((r) => scope.range(r)))
+        useProxy(win.Range.prototype, 'getClientRects', rectListHandler((r, n) => scope.range(r, n)))
       }
     }
   },
@@ -2042,20 +2123,29 @@ export const hookTasks: HookTask[] = [
         if (count === 1) return textOfNode(nodeListAt(nodeGet(node, 'childNodes'), start))
       }
 
-      /* 首个矩形与 getBoundingClientRect 使用相同噪音，保持一致 */
+      /*
+       * 宽高各移动一个布局单位，测量值仍在布局网格上；同一文本经元素或 Range 测得的噪音相同。
+       * 只处理单行的行内元素与 Range（见 makeRectScope）：块级元素的宽高可由 getComputedStyle 读出对比
+       */
+      const unit = layoutUnitOf(ctx.info.browser)
+      const scope = makeRectScope(win)
+      const shift = (rect: DOMRect, key: 'width' | 'height', mark: string) => {
+        const v = rectGet(rect, key)
+        if (!(v > 0)) return;
+        const k = v <= unit || noiseOf(mark, key) >= 0 ? 1 : -1
+        rectSet(rect, key, shiftLayout(v, k, unit))
+      }
       const noiseRect = (rect: DOMRect | undefined, mark: string) => {
         if (!rect) return;
-        const width = rectGet(rect, 'width')
-        if (width !== 0) rectSet(rect, 'width', width + noiseOf(mark, 'width'))
-        const height = rectGet(rect, 'height')
-        if (height !== 0) rectSet(rect, 'height', height + noiseOf(mark, 'height'))
+        shift(rect, 'width', mark)
+        shift(rect, 'height', mark)
       }
 
-      const rectHandler = <T>(textOf: (target: T) => string | undefined) => ({
+      const rectHandler = <T>(textOf: (target: T) => string | undefined, inScope: (target: T) => boolean) => ({
         apply(target: any, thisArg: T, args: any) {
           const rect: DOMRect = apply(target, thisArg, args)
           const text = rect && textOf(thisArg)
-          if (text) {
+          if (text && inScope(thisArg)) {
             notify('strong.emoji')
             noiseRect(rect, text)
           }
@@ -2063,25 +2153,23 @@ export const hookTasks: HookTask[] = [
         }
       })
 
-      const rectListHandler = <T>(textOf: (target: T) => string | undefined) => ({
+      const rectListHandler = <T>(textOf: (target: T) => string | undefined, inScope: (target: T, count: number) => boolean) => ({
         apply(target: any, thisArg: T, args: any) {
           const list: DOMRectList = apply(target, thisArg, args)
           const len = list ? rectListLength(list) : 0
           const text = len ? textOf(thisArg) : undefined
-          if (text) {
+          if (text && inScope(thisArg, len)) {
             notify('strong.emoji')
-            for (let i = 0; i < len; i++) {
-              noiseRect(list[i], i === 0 ? text : text + ':' + i)
-            }
+            noiseRect(list[0], text)
           }
           return list
         }
       })
 
-      useProxy(win.Element.prototype, 'getBoundingClientRect', rectHandler<Element>(textOfNode))
-      useProxy(win.Element.prototype, 'getClientRects', rectListHandler<Element>(textOfNode))
-      useProxy(win.Range.prototype, 'getBoundingClientRect', rectHandler<Range>(textOfRange))
-      useProxy(win.Range.prototype, 'getClientRects', rectListHandler<Range>(textOfRange))
+      useProxy(win.Element.prototype, 'getBoundingClientRect', rectHandler<Element>(textOfNode, (el) => scope.element(el)))
+      useProxy(win.Element.prototype, 'getClientRects', rectListHandler<Element>(textOfNode, (el, n) => scope.element(el, n)))
+      useProxy(win.Range.prototype, 'getBoundingClientRect', rectHandler<Range>(textOfRange, (r) => scope.range(r)))
+      useProxy(win.Range.prototype, 'getClientRects', rectListHandler<Range>(textOfRange, (r, n) => scope.range(r, n)))
     }
   },
 
@@ -2283,40 +2371,50 @@ export const hookTasks: HookTask[] = [
    * .toString
    */
   {
-    onEnable: ({ gthis, info, isReg, otherProxy, useRaw, useProxy }) => {
-      function isRealFunction(obj: any) {
-        const target = Function.prototype.toString
-        let proto = obj;
-        while (proto = Object.getPrototypeOf(proto)) {
-          if (proto.toString === target) {
-            return !otherProxy.has(proto)
-          }
-        }
-        return false;
-      }
-
+    onEnable: ({ gthis, isReg, useRaw, useProxy }) => {
       /* toString 自身也是已注册的代理，经 useRaw 取到原生函数，无需特殊处理 */
       useProxy(gthis.Function.prototype, 'toString', {
         apply(target: any, self: any, args: any[]) {
-          try {
-            if (self != null && isReg(self)) {
-              const raw = useRaw(self);
-              if (raw) return apply(target, raw, args);
-            }
-            return apply(target, self, args);
-          } catch (e: any) {
-            // 堆栈伪造
-            if (info.browser !== 'firefox' && e && typeof e.stack === 'string') {
-              const es = e.stack.split('\n')
-              if (isRealFunction(self)) {
-                es[1] = es[1].replace('Object', 'Function')
-              }
-              const applyIdx = es.findIndex((l: string, idx: number) => idx > 0 && l.includes('apply'));
-              es.splice(applyIdx !== -1 ? applyIdx : 2, 1);
-              e.stack = es.join('\n');
-            }
-            throw e;
+          if (self != null && isReg(self)) {
+            const raw = useRaw(self);
+            if (raw) return apply(target, raw, args);
           }
+          /*
+           * 非函数的接收者会抛错（注入脚本的帧由陷阱包装去掉）。报错帧的类型名由接收者原型链上的
+           * constructor 得出，引擎查找时不进入代理：原型是被钩取的函数（如 Object.create(fn)）时
+           * 得到 Object 而非原生的 Function，改以原型为原始函数的对象调用，报错与原生一致。
+           * 页面的 Function.prototype.toString 是代理，引擎按方法查找帧的方法名时找不到正在执行的原函数，
+           * 替身上以自有属性放置原函数，方法名（CallSite.getMethodName）也与原生一致
+           */
+          if (typeof self === 'object' && self !== null) {
+            const proto = getPrototypeOf(self)
+            const viaProxy = isReg(proto)
+            /* 原生调用时接收者上的 toString 是否解析到正在执行的原函数（页面看到的是其代理） */
+            let found: any
+            for (let p: any = self, depth = 0; p != null && depth < 64; p = getPrototypeOf(p), depth++) {
+              const d = getOwnPropertyDescriptor(useRaw(p), 'toString')
+              if (d) {
+                found = hasOwn(d, 'value') ? d.value : undefined
+                break
+              }
+            }
+            const inherited = isReg(found) && useRaw(found) === target
+            if (viaProxy || inherited) {
+              const standIn = objectCreate(viaProxy ? useRaw(proto) : proto)
+              const define = (key: PropertyKey, value: any) => {
+                const desc: PropertyDescriptor = nullObject()
+                desc.value = value
+                desc.writable = true
+                desc.configurable = true
+                defineProperty(standIn, key, desc)
+              }
+              if (inherited) define('toString', target)
+              const tag = getOwnPropertyDescriptor(self, TO_STRING_TAG)
+              if (tag && hasOwn(tag, 'value') && typeof tag.value === 'string') define(TO_STRING_TAG, tag.value)
+              return apply(target, standIn, args)
+            }
+          }
+          return apply(target, self, args);
         }
       })
 

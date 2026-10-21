@@ -12,6 +12,7 @@ export const apply = R.apply
 export const construct = R.construct
 export const reflectGet = R.get
 export const reflectSetPrototypeOf = R.setPrototypeOf
+export const reflectDeleteProperty = R.deleteProperty
 
 /** 代理处理器的全部陷阱对应的原生 Reflect 方法 */
 export const NATIVE_TRAPS = {
@@ -43,6 +44,7 @@ export const NativeError = Error
 export const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor
 export const defineProperty = Object.defineProperty
 export const getPrototypeOf = Object.getPrototypeOf
+export const getOwnPropertyNames = Object.getOwnPropertyNames
 export const objectCreate = Object.create
 export const objectFreeze = Object.freeze
 export const stringify = JSON.stringify
@@ -52,6 +54,7 @@ export const numIsNaN = isNaN
 export const numParseFloat = parseFloat
 export const mathRandom = Math.random
 export const mathFloor = Math.floor
+export const fround = Math.fround
 export const ITERATOR: typeof Symbol.iterator = Symbol.iterator
 
 /**

@@ -7,6 +7,7 @@ import { logManager } from '@/utils/log';
 
 import { isCloudflareChallengeContext } from './cloudflare';
 import { channelWinKey } from './channel';
+import { guardTrap, stackRealmsOf, type StackRealm } from './stack';
 import {
   NATIVE_TRAPS, NativeProxy, NativeWeakMap, NativeWeakSet, PROXY_TRAPS, apply, defineProperty, floor,
   getOwnPropertyDescriptor, getPrototypeOf, hasOwn, isArray, nullObject, reflectGet, reflectSetPrototypeOf, stringify,
@@ -92,7 +93,6 @@ export class FingerprintContext {
 
   /// hook存储
   public myProxy: WeakSet<object>;
-  public otherProxy: WeakSet<object>;
   /** 被隐藏的自有属性，不在对象上留下标记 */
   public disown: WeakMap<object, DisownEntry>;
   /** 经由 Reflect.setPrototypeOf 调用的原型对象 */
@@ -108,6 +108,11 @@ export class FingerprintContext {
     raw: symbol;
     winKey?: symbol;
   };
+
+  /** 本窗口与注入脚本所在窗口的 Error 及其 stack 访问器（清理报错调用栈时使用） */
+  private stackRealms!: StackRealm[]
+  /** 本窗口的 Object.setPrototypeOf（模拟原型链成环报错时使用） */
+  private realmSetPrototypeOf!: typeof Object.setPrototypeOf
 
   /** 钩子安装前的 Function.prototype 及其 caller / arguments 原生描述符 */
   private fnProto?: object
@@ -147,19 +152,19 @@ export class FingerprintContext {
         if (weakSetHas(this.reflectMark, proto)) {
           return reflectSetPrototypeOf(target, target);
         }
-        try {
-          return objectSetPrototypeOf(target, target);
-        } catch (e: any) {
-          // 堆栈伪造
-          if (this.info.browser !== 'firefox') {
-            const es = e.stack.split('\n')
-            es.splice(1, 2);
-            e.stack = es.join('\n');
-          }
-          throw e;
-        }
+        /*
+         * 以本窗口的方法抛错：错误属于目标所在 realm（与原生一致，instanceof 判断不露馅）；
+         * 注入脚本的帧由陷阱包装去掉，调用栈也与原生一致
+         */
+        return apply(this.realmSetPrototypeOf, undefined, [target, target]);
       }
       return reflectSetPrototypeOf(target, proto)
+    }
+
+    /* 错误离开陷阱时清理调用栈：去掉注入脚本的帧，页面比较报错的调用栈也识别不出钩子 */
+    for (let i = 0; i < PROXY_TRAPS.length; i++) {
+      const trap = PROXY_TRAPS[i]
+      if (res[trap]) res[trap] = guardTrap(res[trap], trap, this.stackRealms)
     }
 
     return res as ProxyHandler<T>
@@ -418,7 +423,6 @@ export class FingerprintContext {
     this.conf = conf
 
     this.myProxy = opt.myProxy ?? new NativeWeakSet()
-    this.otherProxy = opt.otherProxy ?? new NativeWeakSet()
     this.disown = opt.disown ?? new NativeWeakMap()
     this.reflectMark = opt.reflectMark ?? new NativeWeakSet()
     this.seed = opt.seed ?? {
@@ -436,6 +440,9 @@ export class FingerprintContext {
     this.baseUrl = opt.baseUrl
 
     /* 在钩子安装前取得（新窗口此时尚未运行页面脚本） */
+    this.stackRealms = stackRealmsOf(gthis.Error)
+    this.realmSetPrototypeOf = gthis.Object?.setPrototypeOf ?? objectSetPrototypeOf
+
     this.fnAccessors = nullObject()
     this.fnProto = gthis.Function?.prototype
     if (this.fnProto) {

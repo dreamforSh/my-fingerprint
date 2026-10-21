@@ -4,7 +4,8 @@ import type { FingerprintContext } from "./core";
 import { isCloudflareCaller } from "./cloudflare";
 import { emitNotice } from "./channel";
 import {
-  NativeWeakMap, apply, floor, getOwnPropertyDescriptor, getPrototypeOf, nullObject, round, weakMapGet, weakMapSet,
+  NativeWeakMap, NativeWeakSet, apply, floor, fround, getOwnPropertyDescriptor, getPrototypeOf, nullObject, round,
+  weakMapGet, weakMapSet, weakSetAdd, weakSetHas,
 } from "./intrinsics";
 
 //
@@ -86,7 +87,8 @@ export const randomFontNoise = (seed: number, mark: string): number => {
  * 获取随机屏幕尺寸
  */
 export const randomScreenSize = (screen: Screen, seed: number) => {
-  const offset = round(seededRandom(seed, 100, -100))
+  /* 只放大：屏幕比真实的小时，最大化的窗口（outerWidth 等）会比屏幕还大 */
+  const offset = round(seededRandom(seed, 100, 1))
   const ratio = screen.width / screen.height;
 
   let width: number
@@ -195,6 +197,62 @@ export const rectSet = (rect: DOMRect, key: 'x' | 'y' | 'width' | 'height', v: n
  */
 export const rectListLength = (list: DOMRectList): number => apply(getRectListLength!, list, [])
 
+/**
+ * 布局单位（CSS 像素）：Chromium 1/64，Firefox 1/60
+ * 尺寸噪音取其整数倍：测量值仍落在布局网格上，与原生一样是单精度浮点数
+ */
+export const layoutUnitOf = (browser?: string) => browser === 'firefox' ? 1 / 60 : 1 / 64
+
+/**
+ * 移动 k 个布局单位：原值在网格上时结果也在网格上（经变换的元素不在网格上，只保持单精度）
+ */
+export const shiftLayout = (v: number, k: number, unit: number): number => {
+  const n = round(v / unit)
+  return fround(fround(n * unit) === v ? (n + k) * unit : v + k * unit)
+}
+
+const XHTML_NS = 'http://www.w3.org/1999/xhtml'
+const getNamespaceURI = getterOf(protoOf('Element'), 'namespaceURI')
+
+/**
+ * DOM 尺寸加噪的适用范围：只有一个矩形（单行）的行内 HTML 元素与 Range
+ * - 块级、替换元素的宽高可由 getComputedStyle 读出，与矩形对比就能发现噪音（行内元素为 auto）
+ * - 多行时各行矩形与外接矩形难以同时保持一致
+ * - SVG 等元素另有 getBBox 等不经过这里的测量方法
+ * 用到的方法在钩取窗口时（页面脚本运行前）取得
+ */
+export const makeRectScope = (win: Window & typeof globalThis) => {
+  const computedStyle = win.getComputedStyle
+  const propertyValue = win.CSSStyleDeclaration?.prototype.getPropertyValue
+  const elementRects = win.Element.prototype.getClientRects
+  const rangeRects = win.Range?.prototype.getClientRects
+
+  const rectCount = (rects: Function | undefined, target: object): number => {
+    try {
+      return rects ? rectListLength(apply(rects, target, [])) : 0
+    } catch (_) {
+      return 0
+    }
+  }
+
+  return {
+    /** @param count 已取得的矩形数量（getClientRects 中），未知时读取 */
+    element: (el: Element, count?: number): boolean => {
+      if (!getNamespaceURI || !computedStyle || !propertyValue) return false
+      try {
+        if (apply(getNamespaceURI, el, []) !== XHTML_NS) return false
+        const style = apply(computedStyle, win, [el])
+        if (apply(propertyValue, style, ['width']) !== 'auto') return false
+        if (apply(propertyValue, style, ['height']) !== 'auto') return false
+      } catch (_) {
+        return false
+      }
+      return (count ?? rectCount(elementRects, el)) === 1
+    },
+    range: (range: Range, count?: number): boolean => (count ?? rectCount(rangeRects, range)) === 1,
+  }
+}
+
 const NODE_GETTERS = {
   nodeType: getterOf(protoOf('Node'), 'nodeType'),
   firstChild: getterOf(protoOf('Node'), 'firstChild'),
@@ -206,11 +264,21 @@ const CHAR_DATA_GETTERS = {
   data: getterOf(protoOf('CharacterData'), 'data'),
 }
 const charDataSubstringData: Function | undefined = protoOf('CharacterData')?.substringData
+/**
+ * 沿原型链查找 getter：接口层级随浏览器版本变化（如新版 Chromium 在 AbstractRange 与 Range 之间
+ * 加了 NodeRange，startContainer / endContainer 定义在它上面）
+ */
+const getterInChain = (proto: any, key: string): Function | undefined => {
+  for (let p = proto, depth = 0; p != null && depth < 8; p = getPrototypeOf(p), depth++) {
+    const getter = getterOf(p, key)
+    if (getter) return getter
+  }
+}
 const RANGE_GETTERS = {
-  startContainer: getterOf(protoOf('AbstractRange'), 'startContainer') ?? getterOf(protoOf('Range'), 'startContainer'),
-  endContainer: getterOf(protoOf('AbstractRange'), 'endContainer') ?? getterOf(protoOf('Range'), 'endContainer'),
-  startOffset: getterOf(protoOf('AbstractRange'), 'startOffset') ?? getterOf(protoOf('Range'), 'startOffset'),
-  endOffset: getterOf(protoOf('AbstractRange'), 'endOffset') ?? getterOf(protoOf('Range'), 'endOffset'),
+  startContainer: getterInChain(protoOf('Range'), 'startContainer'),
+  endContainer: getterInChain(protoOf('Range'), 'endContainer'),
+  startOffset: getterInChain(protoOf('Range'), 'startOffset'),
+  endOffset: getterInChain(protoOf('Range'), 'endOffset'),
 }
 
 /** Node 属性（原生 getter） */
@@ -360,14 +428,28 @@ const pickNatives = (self: any, key: 'width' | 'ctxCanvas'): CanvasNatives | und
 }
 
 /**
+ * 页面已取得过渲染上下文的画布
+ * 加噪时不能为尚无上下文的画布创建 2d 上下文：画布会被占用，页面之后取 webgl 上下文得到 null，
+ * 取 2d 上下文得到的也是以默认属性创建的那个
+ */
+const contextCanvases: WeakSet<object> = new NativeWeakSet()
+
+export const markCanvasContext = (canvas: unknown) => {
+  if (canvas !== null && typeof canvas === 'object') weakSetAdd(contextCanvases, canvas)
+}
+
+/**
  * 读取画布尺寸并获取 2d 上下文（原生方法）
+ * 画布尚无上下文（空白）或是其他类型的上下文时返回 undefined
  */
 export const getCanvas2d = (canvas: any): { width: number, height: number, ctx: any } | undefined => {
+  if (!weakSetHas(contextCanvases, canvas)) return;
   const n = pickNatives(canvas, 'width')
   if (!n) return;
   const width = apply(n.width!, canvas, [])
   const height = apply(n.height!, canvas, [])
   if (!(width > 0 && height > 0)) return;
+  /* 已有上下文时不会新建：已有 2d 上下文则返回它，其他类型返回 null */
   const ctx = apply(n.getContext, canvas, ['2d'])
   return ctx ? { width, height, ctx } : undefined
 }
