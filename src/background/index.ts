@@ -6,6 +6,9 @@ import { reRequestHeader } from "./request";
 import { logManager } from '@/utils/log';
 import { removeBrowsingData } from "./browsing-data";
 import { reIpInfo, reIpInfoAlarm } from "./ip-info";
+import { getCsp, watchCsp } from "./csp";
+
+watchCsp()
 
 const logger = logManager.createLogger(__LOG_PREFIX_FILE_PATH__);
 
@@ -134,6 +137,17 @@ chrome.runtime.onMessage.addListener(((msg, sender, sendResponse) => {
       })
       return true
     }
+    case 'csp.get': {
+      const tabId = sender.tab?.id
+      if (tabId == null || sender.frameId !== 0 || !sender.url) {
+        sendResponse<'csp.get'>({ known: false, restrictive: true })
+        return false
+      }
+      getCsp(tabId, sender.url).then((v) => {
+        sendResponse<'csp.get'>(v)
+      })
+      return true
+    }
   }
 }) as BackgroundMessage.Listener)
 
@@ -150,20 +164,14 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     // 兼容模式注入，内部判断是否需要注入
     injectScript(tabId, storage)
 
-    const _url = tab.url ? tryUrl(tab.url) : undefined
-    if (!_url?.hostname) return;
+    const hostname = (tab.url ? tryUrl(tab.url) : undefined)?.hostname
 
-    if (storage.policies.isBlacklistMode) {
-      if (existParentDomain(storage.policies.blacklist, _url.hostname)) {
-        logger.debug('in blacklist mode', _url.hostname);
-        reRequestHeader(undefined, tabId)
-      }
-    } else {
-      if (existParentDomain(storage.policies.whitelist, _url.hostname)) {
-        logger.debug('in whitelist mode', _url.hostname);
-        reRequestHeader(tabId)
-        setBadgeWhitelist(tabId)
-      }
+    // 进入或离开名单内的站点时，更新请求头的标签页列表
+    reRequestHeader({ id: tabId, hostname })
+
+    if (hostname && !storage.policies.isBlacklistMode && existParentDomain(storage.policies.whitelist, hostname)) {
+      logger.debug('in whitelist mode', hostname);
+      setBadgeWhitelist(tabId)
     }
   }
 });
@@ -172,7 +180,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
  * 监听tab关闭
  */
 chrome.tabs.onRemoved.addListener((tabId) => {
-  reRequestHeader(undefined, tabId)
+  reRequestHeader({ id: tabId })
   removeBadge(tabId)
 })
 

@@ -70,3 +70,39 @@ test('isCjkLocalVoice only matches local Chinese voices', () => {
   assert.equal(isCjkLocalVoice({ lang: 'en-US', localService: true }), false)
   assert.equal(isCjkLocalVoice({ lang: 'zu-ZA', localService: true }), false)
 })
+
+test('cjk helpers keep working after the page overrides String / RegExp / Set methods', () => {
+  const saved = {
+    exec: RegExp.prototype.exec,
+    test: RegExp.prototype.test,
+    replace: String.prototype.replace,
+    trim: String.prototype.trim,
+    toLowerCase: String.prototype.toLowerCase,
+    startsWith: String.prototype.startsWith,
+    has: Set.prototype.has,
+    some: Array.prototype.some,
+  }
+  try {
+    RegExp.prototype.exec = () => null
+    RegExp.prototype.test = () => false
+    String.prototype.replace = function () { return String(this) }
+    String.prototype.trim = () => ''
+    String.prototype.toLowerCase = () => ''
+    String.prototype.startsWith = () => false
+    Set.prototype.has = () => false
+    Array.prototype.some = () => false
+
+    assert.equal(hasCjk('中文'), true)
+    assert.equal(maskCjk('a中b'), `a${CJK_MASK_CHAR}b`)
+    assert.equal(isCjkFontFamily(' "Microsoft YaHei" '), true)
+    assert.equal(isCjkFontFamily('Noto Sans CJK SC'), true)
+    assert.equal(hasCjkFontFamily('12px SimSun, Arial'), true)
+    assert.equal(stripCjkFontFamilies('12px SimSun, Arial', '"x"'), '12px Arial, "x"')
+    assert.equal(isCjkLocalVoice({ lang: 'zh-CN', localService: true }), true)
+  } finally {
+    Object.assign(RegExp.prototype, { exec: saved.exec, test: saved.test })
+    Object.assign(String.prototype, { replace: saved.replace, trim: saved.trim, toLowerCase: saved.toLowerCase, startsWith: saved.startsWith })
+    Set.prototype.has = saved.has
+    Array.prototype.some = saved.some
+  }
+})

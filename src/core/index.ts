@@ -1,11 +1,33 @@
-import { FingerprintContext, WIN_KEY } from "./core";
+import { FingerprintContext } from "./core";
 import { genRandomSeed, existParentDomain } from "@/utils/base";
 import { getBrowser } from "@/utils/equipment";
-import { sendToWindow } from "@/utils/message";
 import { logManager } from '@/utils/log';
 import { isCloudflareChallengeContext } from "./cloudflare";
+import {
+  channelWinKey, derivePageSeed, initChannel, onChannelMessage, onContentEvent, postToWindow, relayNotice, sign,
+  splitPayload,
+} from "./channel";
+import { defineProperty, fnToString, stringify } from "./intrinsics";
 
 const logger = logManager.createLogger(__LOG_PREFIX_FILE_PATH__);
+
+/**
+ * 顶层窗口的源（ancestorOrigins 的最后一项），不可用或为不透明源时返回 undefined
+ */
+const topOriginOf = (ancestors?: DOMStringList): string | undefined => {
+  if (!ancestors || !ancestors.length) return;
+  const origin = ancestors[ancestors.length - 1]
+  return origin && origin !== 'null' ? origin : undefined
+}
+
+/**
+ * 源中的主机名（注入时调用，页面脚本尚未运行）
+ */
+const hostOfOrigin = (origin: string): string | undefined => {
+  try {
+    return new URL(origin).hostname || undefined
+  } catch (_) { }
+}
 
 // @ts-ignore
 const args = _args;
@@ -30,6 +52,15 @@ const args = _args;
     // @ts-ignore
     if (!args.fun && typeof coreInject === 'function') args.fun = coreInject;
     if (!window || !storage) return;
+
+    /* 页面脚本运行前完成：注入 Worker 所需的源码与配置、通信标识 */
+    if (typeof args.fun === 'function') {
+      args.funSrc = fnToString(args.fun);
+      args.funName = args.fun.name;
+    }
+    args.confJson = stringify(storage.config);
+    initChannel(storage.channel, `${storage.config.seed.browser}:${storage.config.seed.global}`);
+    const winKey = channelWinKey()!;
 
     /**
      * Cloudflare 验证兼容：验证组件（Turnstile / Challenge）会检测环境是否被篡改。
@@ -63,16 +94,20 @@ const args = _args;
       } catch (_) { }
     }
 
+    const browser = getBrowser(navigator.userAgent);
+
     if (window.top === window) {
+      /* 页面标识可公开，页面种子由密钥与标识派生 */
+      const loadId = '' + genRandomSeed();
       const data: WindowStorage = {
-        url: location.href,
         host: location.hostname,
-        seed: genRandomSeed(),
+        loadId,
+        seed: derivePageSeed(loadId),
         hooked: false,
-        browser: getBrowser(navigator.userAgent),
+        browser,
       }
       try {
-        Object.defineProperty(window, WIN_KEY, {
+        defineProperty(window, winKey, {
           value: data,
           writable: true,
           configurable: true,
@@ -80,18 +115,25 @@ const args = _args;
         });
       } catch (_) {
         // @ts-ignore
-        window[WIN_KEY] = data;
+        window[winKey] = data;
       }
-      window.addEventListener('message', ((ev) => {
-        const msg = ev?.data?.__myfp__;
-        if (!msg || !ev.source) return;
-        if (msg.type === 'core.get-info') {
-          sendToWindow(ev.source, {
-            type: 'core.run',
-            data,
-          }, ev.origin)
+
+      /* 页面 CSP 是否允许把 URL Worker 换成 blob Worker（后台读取响应头，经内容脚本转交） */
+      onContentEvent(':csp', (detail) => {
+        if (detail === 'allow' || detail === 'deny') data.workerBlob = detail
+      })
+
+      onChannelMessage(window, (payload, source, origin) => {
+        const parts = splitPayload(payload, 3);
+        const type = parts[0], kind = parts[1], json = parts[2];
+        if (type === 'get' && source) {
+          /* 回复跨源 iframe：只含页面已知的信息与签名 */
+          const body = data.host + '|' + loadId;
+          postToWindow(source, 'run|' + body + '|' + sign('run|' + body), origin === 'null' ? '*' : origin);
+        } else if (type === 'notice' && kind && json) {
+          relayNotice(kind, json);
         }
-      }) as WindowMessage.Listener)
+      })
       hook(window, data)
       return;
     }
@@ -99,17 +141,44 @@ const args = _args;
     try {
       /* 同源 */
       const top: any = window.top ?? window
-      const data = top[WIN_KEY]
+      const data = top[winKey]
       hook(window, data)
     } catch (_) {
-      /* 跨源 */
-      window.addEventListener('message', ((ev) => {
-        const msg = ev?.data?.__myfp__;
-        if (msg?.type === 'core.run') {
-          hook(window, msg.data)
-        }
-      }) as WindowMessage.Listener)
-      sendToWindow(window.top ?? window, { type: 'core.get-info' })
+      /*
+       * 跨源：能经 location.ancestorOrigins 同步得知顶层源时（Chrome）立即注入，iframe 自己的脚本运行前即受保护；
+       * 页面种子无法同步取得，改由密钥与顶层源派生（同一会话、同一顶层站点内稳定）
+       */
+      const topOrigin = topOriginOf(location.ancestorOrigins)
+      const topHost = topOrigin && hostOfOrigin(topOrigin)
+      if (topHost) {
+        const loadId = 'origin:' + topOrigin
+        hook(window, {
+          host: topHost,
+          loadId,
+          seed: derivePageSeed(loadId),
+          hooked: false,
+          browser,
+        })
+        return;
+      }
+
+      /* 否则（Firefox）向顶层取得页面信息后注入 */
+      let done = false
+      onChannelMessage(window, (payload) => {
+        if (done) return;
+        const parts = splitPayload(payload, 4);
+        const type = parts[0], host = parts[1], loadId = parts[2], tag = parts[3];
+        if (type !== 'run' || !loadId || tag !== sign('run|' + host + '|' + loadId)) return;
+        done = true
+        hook(window, {
+          host,
+          loadId,
+          seed: derivePageSeed(loadId),
+          hooked: false,
+          browser,
+        })
+      })
+      postToWindow(window.top ?? window, 'get')
     }
   }
   else if (typeof self !== "undefined") {

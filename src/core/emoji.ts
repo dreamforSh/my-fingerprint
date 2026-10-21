@@ -10,12 +10,16 @@
 const EMOJI_PATTERN = '\\p{Extended_Pictographic}|\\p{Regional_Indicator}|\\u20E3'
 const EMOJI_TEST = new RegExp(EMOJI_PATTERN, 'u')
 
+/* 注入时缓存：页面改写 RegExp.prototype.test / exec 也无法让判断失效 */
+const regExec = RegExp.prototype.exec
+const apply = Reflect.apply
+
 /**
  * 文本长度上限，超出时不视为 Emoji 探测文本
  */
 export const EMOJI_TEXT_MAX_LENGTH = 64
 
-export const hasEmoji = (text: string) => EMOJI_TEST.test(text)
+export const hasEmoji = (text: string) => apply(regExec, EMOJI_TEST, [text]) !== null
 
 /**
  * 是否是用于 Emoji 探测的短文本

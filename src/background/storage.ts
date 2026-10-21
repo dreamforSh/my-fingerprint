@@ -18,6 +18,34 @@ type LocalStorageContext = {
 
 const randNonce = () => Math.floor(Math.random() * 1e9);
 
+const SESSION_INITED_KEY = 'inited'
+
+/**
+ * 标记当前浏览器会话已初始化，返回是否为会话内首次初始化
+ * storage.session 在浏览器重启、扩展重载或更新时清空，Service Worker 被回收后重启时保留
+ */
+const markSessionInited = async (): Promise<boolean> => {
+  try {
+    const data = await chrome.storage.session.get(SESSION_INITED_KEY)
+    if (data[SESSION_INITED_KEY]) return false
+    await chrome.storage.session.set({ [SESSION_INITED_KEY]: true })
+  } catch (_) { }
+  return true
+}
+
+const randomHex = (bytes: number) => {
+  const arr = crypto.getRandomValues(new Uint8Array(bytes))
+  return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * 生成核心脚本的通信标识
+ */
+const genChannel = (): StorageChannel => ({
+  id: 'e' + randomHex(12),
+  secret: randomHex(16),
+})
+
 /**
  * 生成默认配置
  */
@@ -26,6 +54,7 @@ export const genDefaultLocalStorage = (): LocalStorage => {
   const sGlobal = genRandomSeed();
   return {
     version: manifest.version,
+    channel: genChannel(),
     profiles: [],
     config: {
       enable: true,
@@ -173,8 +202,14 @@ export const initLocalStorage = sharedAsync(async () => {
     },
   }
 
-  /** 刷新浏览器种子 */
-  _storage.config.seed.browser = genRandomSeed()
+  /**
+   * 刷新浏览器种子与通信标识：仅在浏览器会话内首次初始化时刷新，Service Worker 被回收后重启沿用原值
+   */
+  const isSessionStart = await markSessionInited()
+  if (isSessionStart) {
+    _storage.config.seed.browser = genRandomSeed()
+  }
+  _storage.channel = (!isSessionStart && _curr.channel?.id && _curr.channel?.secret) ? _curr.channel : _default.channel
 
   /** 更新日志等级 */
   logManager.setLevel(_storage.config.prefs.logLevel)
@@ -188,7 +223,8 @@ export const initLocalStorage = sharedAsync(async () => {
   chrome.storage.local.set(_storage).then(() => {
     reRegisterScript()
     reRequestHeader()
-    applySubscribeStorage()
+    /* 订阅同样只在会话开始时拉取，避免每次唤醒都覆盖用户的修改 */
+    if (isSessionStart) applySubscribeStorage()
   })
 
   reActionIcon(_storage.config.enable)

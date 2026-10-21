@@ -6,8 +6,17 @@ type CustomProfile = {
   config: LocalStorageConfig
 }
 
+/**
+ * 核心脚本的通信标识，每次浏览器会话重新生成
+ */
+type StorageChannel = {
+  id: string  // 核心脚本通知内容脚本所用的事件名
+  secret: string  // 核心脚本之间派生通信标识、签名与页面种子的密钥
+}
+
 type LocalStorage = {
   version: string
+  channel?: StorageChannel  // 通信标识
   config: LocalStorageConfig  // 配置
   policies: LocalStoragePolicies  // 策略
   profiles?: CustomProfile[]  // 用户自定义保存的指纹预设
@@ -105,9 +114,10 @@ type HookFingerprint = {
 type HookFingerprintKey = keyof HookFingerprint['navigator'] | keyof HookFingerprint['screen'] | keyof HookFingerprint['other'] | keyof HookFingerprint['normal']
 
 type WindowStorage = {
-  url: string
   host: string
+  loadId?: string  // 页面标识，可公开；页面种子由通信密钥与它派生
   seed: number
   hooked: boolean
   browser?: BrowserType
+  workerBlob?: 'allow' | 'deny'  // 页面 CSP 是否允许把 URL Worker 换成 blob Worker，未知时不替换
 }

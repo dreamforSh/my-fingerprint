@@ -4,6 +4,7 @@
 
 // 保留副本，避免被网站清空
 const log = console.log;
+const reflectApply = Reflect.apply;
 const warn = console.warn;
 const error = console.error;
 
@@ -129,15 +130,17 @@ class Logger {
     const levelName = LogLevel[level];
     const log = Logger.LogMethodMap[level];
 
-    log(
+    /* 不展开参数：注入页面时数组迭代器可被页面改写，参数中可能含有配置 */
+    const list: unknown[] = [
       `%c${timestamp} %c[${Logger.extensionName}] %c@${this.scope} - %c${levelName} %c[${this.prefix}]`,
       Logger.timestampStyle,
       Logger.prefixStyle,
       Logger.scopeStyle,
       LogStyle[level],
       Logger.prefixStyle,
-      ...args,
-    );
+    ]
+    for (let i = 0; i < args.length; i++) list[list.length] = args[i]
+    reflectApply(log, undefined, list);
   }
 
   /** 输出 debug 级别日志 */

@@ -2,10 +2,26 @@ import { HookType } from '@/types/enum'
 import { seededRandom } from "@/utils/base";
 import { genRandomSeed } from "../utils/base";
 import { hookTasks } from "./tasks";
-import { notify, notifyIframeOrigin } from './utils';
+import { contentWindowOf, notify, notifyIframeOrigin } from './utils';
 import { logManager } from '@/utils/log';
 
-import { isCloudflareChallengeContext, isCloudflareElement } from './cloudflare';
+import { isCloudflareChallengeContext } from './cloudflare';
+import { channelWinKey } from './channel';
+import { guardTrap, stackRealmsOf, type StackRealm } from './stack';
+import {
+  NATIVE_TRAPS, NativeProxy, NativeWeakMap, NativeWeakSet, PROXY_TRAPS, apply, defineProperty, floor,
+  getOwnPropertyDescriptor, getPrototypeOf, hasOwn, isArray, nullObject, reflectGet, reflectSetPrototypeOf, stringify,
+  weakMapGet, weakMapSet, weakSetAdd, weakSetHas,
+} from './intrinsics';
+
+/*
+ * 注意：钩取新建的 iframe 时（hookWindow → 构造 → runHook → 各任务的 onEnable），页面脚本早已运行，
+ * 这条路径上不能使用页面可改写的方法与语法：for...of、数组展开、Array.prototype 方法、Object.keys 等，
+ * 否则页面改写它们就能让新 iframe 不被注入。只使用下标循环与 intrinsics 中缓存的原生方法。
+ */
+
+/** 在注入时创建：创建日志器会调用 Math.max、Array.prototype.push */
+const ctxLogger = logManager.createLogger("FingerprintContext");
 
 export type HookTask = {
   // 条件，为空则默认为true
@@ -14,8 +30,6 @@ export type HookTask = {
   onEnable?: (ctx: FingerprintContext) => void
 }
 
-export const WIN_KEY = Symbol.for('__my_fingerprint__')
-
 type SeedInfo = {
   page: number
   domain: number
@@ -23,30 +37,52 @@ type SeedInfo = {
   global: number
 }
 
+/**
+ * 对象上被隐藏的自有属性
+ * keys 便于按下标遍历，has 无原型，查找时不经过页面可改写的方法
+ */
+export type DisownEntry = {
+  keys: PropertyKey[]
+  has: Record<PropertyKey, true>
+}
+
 type ContextOptions = Pick<FingerprintContext, 'info' | 'conf'> & Partial<FingerprintContext>
 
-const PROXY_TRAPS = [
-  'apply', 'construct', 'get', 'set', 'has', 'deleteProperty', 'defineProperty',
-  'getOwnPropertyDescriptor', 'ownKeys', 'getPrototypeOf', 'setPrototypeOf', 'isExtensible', 'preventExtensions',
-] as const
+const objectSetPrototypeOf = Object.setPrototypeOf
+
+const DESCRIPTOR_KEYS = ['value', 'writable', 'get', 'set', 'enumerable', 'configurable'] as const
+
+/**
+ * 只取自有字段的无原型描述符：页面在 Object.prototype 上定义 get / value 等时，
+ * 字面量描述符会继承它们，defineProperty 会抛错，钩子就装不上
+ */
+const toDescriptor = (attr: PropertyDescriptor): PropertyDescriptor => {
+  const res: Record<string, any> = nullObject()
+  for (let i = 0; i < DESCRIPTOR_KEYS.length; i++) {
+    const k = DESCRIPTOR_KEYS[i]
+    if (hasOwn(attr, k)) res[k] = attr[k]
+  }
+  return res
+}
 
 /**
  * 以已有代理作为目标执行处理器，处理器未定义的操作转发给已有代理
  */
 const composeHandler = <T extends object>(handler: ProxyHandler<T>, inner: T): ProxyHandler<T> => {
-  const composed: Record<string, Function> = {}
-  for (const trap of PROXY_TRAPS) {
-    const fn = handler[trap] as Function | undefined
+  const composed: Record<string, Function> = nullObject()
+  for (let i = 0; i < PROXY_TRAPS.length; i++) {
+    const trap = PROXY_TRAPS[i]
+    const fn = hasOwn(handler, trap) ? handler[trap] as Function : undefined
+    const native = NATIVE_TRAPS[trap] as Function
     composed[trap] = fn ?
-      (_: T, ...rest: any[]) => fn.call(handler, inner, ...rest) :
-      (_: T, ...rest: any[]) => (Reflect[trap] as Function)(inner, ...rest)
+      (_: T, a?: any, b?: any, c?: any) => apply(fn, handler, [inner, a, b, c]) :
+      (_: T, a?: any, b?: any, c?: any) => apply(native, undefined, [inner, a, b, c])
   }
   return composed as ProxyHandler<T>
 }
 
 export class FingerprintContext {
-  /** 不同上下文有不同的日志 */
-  public logger = logManager.createLogger("FingerprintContext");
+  public logger = ctxLogger;
   public gthis: Window & WorkerGlobalScope & typeof globalThis
   public win?: Window & typeof globalThis
   public worker?: WorkerGlobalScope & typeof globalThis
@@ -57,78 +93,102 @@ export class FingerprintContext {
 
   /// hook存储
   public myProxy: WeakSet<object>;
-  public otherProxy: WeakSet<object>;
+  /** 被隐藏的自有属性，不在对象上留下标记 */
+  public disown: WeakMap<object, DisownEntry>;
+  /** 经由 Reflect.setPrototypeOf 调用的原型对象 */
+  public reflectMark: WeakSet<object>;
 
   public args: Record<string, any>;
 
+  /** URL Worker 被换成 blob Worker 时的原脚本地址 */
+  public baseUrl?: string;
+
   /// hook索引
   public symbol: {
-    disown: symbol;
     raw: symbol;
-    reflect: symbol;
     winKey?: symbol;
   };
 
+  /** 本窗口与注入脚本所在窗口的 Error 及其 stack 访问器（清理报错调用栈时使用） */
+  private stackRealms!: StackRealm[]
+  /** 本窗口的 Object.setPrototypeOf（模拟原型链成环报错时使用） */
+  private realmSetPrototypeOf!: typeof Object.setPrototypeOf
+
+  /** 钩子安装前的 Function.prototype 及其 caller / arguments 原生描述符 */
+  private fnProto?: object
+  private fnAccessors: Record<string, PropertyDescriptor | undefined>
+
   private toProxyHandler = <T extends object>(handler: ProxyHandler<T>): ProxyHandler<T> => {
-    return {
-      ...handler,
-      get: (target: any, prop: any, receiver: any) => {
-        if (prop === this.symbol.raw) return target;
-        if (prop === 'caller' || prop === 'arguments') return target[prop];
-        const getter = handler.get ?? Reflect.get
-        return getter(target, prop, receiver)
-      },
-      setPrototypeOf: (target: any, proto: any) => {
-        const raw = this.useRaw(proto)
-        if (target === raw && (this.isReg(proto) || this.isReg(proto.__proto__))) {
-          if (proto[this.symbol.reflect]) {
-            return Reflect.setPrototypeOf(target, raw);
-          } else {
-            try {
-              return Object.setPrototypeOf(target, raw);
-            } catch (e: any) {
-              // 堆栈伪造
-              if (this.info.browser !== 'firefox') {
-                const es = e.stack.split('\n')
-                es.splice(1, 2);
-                e.stack = es.join('\n');
-              }
-              throw e;
-            }
-          }
-        }
-        return Reflect.setPrototypeOf(target, proto)
-      },
+    /* 无原型：处理器未定义的陷阱不会落到页面可改写的 Object.prototype 上 */
+    const res: Record<string, any> = nullObject()
+    for (let i = 0; i < PROXY_TRAPS.length; i++) {
+      const trap = PROXY_TRAPS[i]
+      if (hasOwn(handler, trap)) res[trap] = handler[trap]
     }
+
+    const getter = hasOwn(handler, 'get') ? handler.get : undefined
+    res.get = (target: any, prop: any, receiver: any) => {
+      if (prop === this.symbol.raw) return target;
+      if ((prop === 'caller' || prop === 'arguments') && typeof target === 'function') {
+        /* 以原始函数读取才与原生一致；页面改写了访问器时改为以代理读取，避免把原始函数交给页面 */
+        const native = this.fnAccessors[prop]
+        const curr = this.fnProto && getOwnPropertyDescriptor(this.fnProto, prop)
+        if (native?.get && curr?.get === native.get && !hasOwn(target, prop)) {
+          return apply(native.get, target, [])
+        }
+        return reflectGet(target, prop, receiver)
+      }
+      return getter ? apply(getter, handler, [target, prop, receiver]) : reflectGet(target, prop, receiver)
+    }
+
+    res.setPrototypeOf = (target: any, proto: any) => {
+      /* 原生对象的原型链成环时会抛错，代理需以原始对象模拟，如 Object.setPrototypeOf(fn, Object.create(fn)) */
+      let cyclic = this.useRaw(proto) === target
+      if (!cyclic && !this.isReg(proto) && proto != null && (typeof proto === 'object' || typeof proto === 'function')) {
+        const parent = getPrototypeOf(proto)
+        cyclic = this.isReg(parent) && this.useRaw(parent) === target
+      }
+      if (cyclic) {
+        if (weakSetHas(this.reflectMark, proto)) {
+          return reflectSetPrototypeOf(target, target);
+        }
+        /*
+         * 以本窗口的方法抛错：错误属于目标所在 realm（与原生一致，instanceof 判断不露馅）；
+         * 注入脚本的帧由陷阱包装去掉，调用栈也与原生一致
+         */
+        return apply(this.realmSetPrototypeOf, undefined, [target, target]);
+      }
+      return reflectSetPrototypeOf(target, proto)
+    }
+
+    /* 错误离开陷阱时清理调用栈：去掉注入脚本的帧，页面比较报错的调用栈也识别不出钩子 */
+    for (let i = 0; i < PROXY_TRAPS.length; i++) {
+      const trap = PROXY_TRAPS[i]
+      if (res[trap]) res[trap] = guardTrap(res[trap], trap, this.stackRealms)
+    }
+
+    return res as ProxyHandler<T>
   }
 
   /**
    * 判断对象是否注册代理
    */
   public isReg = (target: any) => {
-    return this.myProxy.has(target)
-  }
-
-  /**
-   * 判断对象以及上游是否注册代理
-   */
-  public hasRaw = (target: any) => {
-    if (target == null) return false;
-    return target[this.symbol.raw] != null
+    return weakSetHas(this.myProxy, target)
   }
 
   /**
    * 获取原始值
+   * 只从已注册的代理读取，页面对象（可能是 Proxy）接触不到内部 symbol
    * @param target 目标
    */
   public useRaw = <T>(target: T): T => {
-    if (target == null) return target;
-    let raw = (target as any)[this.symbol.raw]
+    let raw: any = target
     /* 多层代理时取最内层 */
-    while (raw != null && this.isReg(raw)) {
+    while (this.isReg(raw)) {
       raw = raw[this.symbol.raw]
     }
-    return raw ?? target;
+    return raw;
   }
 
   /**
@@ -136,13 +196,12 @@ export class FingerprintContext {
    * 目标已被代理时，以原始对象为目标创建新代理并依次执行处理器，页面只能看到一层代理
    */
   public newProxy = <T extends object>(target: T, handler: ProxyHandler<T>): T => {
-    const RawProxy = this.useRaw(Proxy)
     if (this.isReg(target)) {
       handler = composeHandler(handler, target)
       target = this.useRaw(target)
     }
-    const proxy = new RawProxy(target, this.toProxyHandler(handler));
-    this.myProxy.add(proxy);
+    const proxy = new NativeProxy(target, this.toProxyHandler(handler));
+    weakSetAdd(this.myProxy, proxy);
     return proxy;
   }
 
@@ -161,9 +220,10 @@ export class FingerprintContext {
     key: K | K[],
     handler: H | ((key: K) => H | void),
   ) => {
-    if (Array.isArray(key)) {
+    if (isArray(key)) {
       /* multi */
-      for (const _k of key) {
+      for (let i = 0; i < key.length; i++) {
+        const _k = key[i]
         const _handler = typeof handler === 'function' ? handler(_k) : handler;
         if (_handler) {
           target[_k] = this.newProxy(target[_k] as any, _handler);
@@ -201,7 +261,7 @@ export class FingerprintContext {
     /* 处理target */
     let _read: T
     let _write: W | T
-    if (Array.isArray(target)) {
+    if (isArray(target)) {
       if (!target.length) return;
       _read = target[0]
       _write = target[1] ?? _read
@@ -211,23 +271,24 @@ export class FingerprintContext {
     }
 
     /* 定义属性 */
-    if (Array.isArray(key)) {
+    if (isArray(key)) {
       /* multi */
-      for (const _k of key) {
-        const desc = Object.getOwnPropertyDescriptor(_read, _k);
+      for (let i = 0; i < key.length; i++) {
+        const _k = key[i]
+        const desc = getOwnPropertyDescriptor(_read, _k);
         if (!desc) continue;
         const attr = typeof attributes === 'function' ? attributes(_k, desc) : attributes;
         if (attr) {
-          Object.defineProperty(_write, _k, attr);
+          defineProperty(_write, _k, toDescriptor(attr));
         }
       }
     } else {
       /* one */
-      const desc = Object.getOwnPropertyDescriptor(_read, key);
+      const desc = getOwnPropertyDescriptor(_read, key);
       if (!desc) return;
       const attr = typeof attributes === 'function' ? attributes(key, desc) : attributes;
       if (attr) {
-        Object.defineProperty(_write, key, attr);
+        defineProperty(_write, key, toDescriptor(attr));
       }
     }
   }
@@ -250,7 +311,7 @@ export class FingerprintContext {
     handler: H | ((key: K, getter: () => any) => H | void)
   ) => {
     this.useDefine(target, key, (_k, desc) => {
-      const getter = desc.get
+      const getter = hasOwn(desc, 'get') ? desc.get : undefined
       if (!getter) return;
       const _handler = typeof handler === 'function' ? handler(_k, getter) : handler
       if (!_handler) return;
@@ -271,7 +332,7 @@ export class FingerprintContext {
     handler: H | ((key: K, setter: (v: any) => any) => H | void)
   ) => {
     this.useDefine(target, key, (_k, desc) => {
-      const setter = desc.set
+      const setter = hasOwn(desc, 'set') ? desc.set : undefined
       if (!setter) return;
       const _handler = typeof handler === 'function' ? handler(_k, setter) : handler
       if (!_handler) return;
@@ -286,13 +347,16 @@ export class FingerprintContext {
    */
   public useDisownKeys = <T>(src: T, keys: (keyof T)[]) => {
     if (src == null || typeof src !== 'object') return;
-    const s = (src as any)[this.symbol.disown];
-    if (s && s instanceof Set) {
-      for (const k of keys) {
-        s.add(k)
-      }
-    } else {
-      (src as any)[this.symbol.disown] = new Set(keys);
+    let entry = weakMapGet(this.disown, src)
+    if (!entry) {
+      entry = { keys: [], has: nullObject() }
+      weakMapSet(this.disown, src, entry)
+    }
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i] as PropertyKey
+      if (entry.has[k]) continue;
+      entry.has[k] = true
+      entry.keys[entry.keys.length] = k
     }
   }
 
@@ -339,8 +403,11 @@ export class FingerprintContext {
    */
   public isDefault = (mode?: HookMode | HookMode[]) => {
     if (!mode) return true
-    if (Array.isArray(mode)) {
-      return mode.every(m => m.type === HookType.default)
+    if (isArray(mode)) {
+      for (let i = 0; i < mode.length; i++) {
+        if (mode[i].type !== HookType.default) return false
+      }
+      return true
     } else {
       return mode.type === HookType.default
     }
@@ -355,22 +422,33 @@ export class FingerprintContext {
     this.info = info
     this.conf = conf
 
-    this.myProxy = opt.myProxy ?? new WeakSet()
-    this.otherProxy = opt.otherProxy ?? new WeakSet()
+    this.myProxy = opt.myProxy ?? new NativeWeakSet()
+    this.disown = opt.disown ?? new NativeWeakMap()
+    this.reflectMark = opt.reflectMark ?? new NativeWeakSet()
     this.seed = opt.seed ?? {
       page: info.seed,
-      domain: Math.floor(seededRandom(info.host, Number.MAX_SAFE_INTEGER, 1)),
+      domain: floor(seededRandom(info.host, Number.MAX_SAFE_INTEGER, 1)),
       browser: conf.seed.browser ?? genRandomSeed(),
       global: conf.seed.global ?? genRandomSeed(),
     }
     this.symbol = opt.symbol ?? {
-      disown: Symbol('DisownProperty'),
       raw: Symbol('RawValue'),
-      reflect: Symbol('Reflect'),
-      winKey: WIN_KEY,
+      winKey: channelWinKey(),
     }
 
     this.args = opt.args ?? {}
+    this.baseUrl = opt.baseUrl
+
+    /* 在钩子安装前取得（新窗口此时尚未运行页面脚本） */
+    this.stackRealms = stackRealmsOf(gthis.Error)
+    this.realmSetPrototypeOf = gthis.Object?.setPrototypeOf ?? objectSetPrototypeOf
+
+    this.fnAccessors = nullObject()
+    this.fnProto = gthis.Function?.prototype
+    if (this.fnProto) {
+      this.fnAccessors.caller = getOwnPropertyDescriptor(this.fnProto, 'caller')
+      this.fnAccessors.arguments = getOwnPropertyDescriptor(this.fnProto, 'arguments')
+    }
 
     if (typeof window !== "undefined") {
       this.win = gthis
@@ -378,7 +456,6 @@ export class FingerprintContext {
       this.worker = gthis
     }
 
-    this.logger.setScope(gthis);
     this.logger.debug("init with options", opt);
 
     this.runHook()
@@ -393,6 +470,8 @@ export class FingerprintContext {
     }
 
     const { info } = opt;
+    const winKey = opt.symbol?.winKey ?? channelWinKey()
+    if (!winKey) throw new Error('channel is not initialized');
 
     if (win === window.top) {
       if (info.hooked) throw new Error('win is already hooked');
@@ -401,21 +480,21 @@ export class FingerprintContext {
       let hooked: boolean = false
       try {
         // @ts-ignore
-        hooked = win[WIN_KEY]
+        hooked = win[winKey]
       } catch (_) {
         throw new Error('unable to access cross source');
       }
       if (hooked) throw new Error('win is already hooked');
       try {
-        Object.defineProperty(win, WIN_KEY, {
+        defineProperty(win, winKey, toDescriptor({
           value: true,
           writable: true,
           configurable: true,
           enumerable: false,
-        });
+        }));
       } catch (_) {
         // @ts-ignore
-        win[WIN_KEY] = true;
+        win[winKey] = true;
       }
     }
 
@@ -446,7 +525,8 @@ export class FingerprintContext {
    */
   private runHook() {
     if (!this.isEnable()) return;
-    for (const task of hookTasks) {
+    for (let i = 0; i < hookTasks.length; i++) {
+      const task = hookTasks[i]
       if (!task.condition || task.condition(this) === true) {
         try {
           task.onEnable?.(this)
@@ -459,17 +539,18 @@ export class FingerprintContext {
 
   /**
    * hook target
+   * 只按窗口实际的源判断是否跳过：iframe 的 id、src 等属性由页面控制，不作依据
    */
   public hookTarget = (target?: Window | HTMLIFrameElement | Node | null) => {
     if (!target) return;
     try {
       const _t: any = target;
-      if (isCloudflareElement(_t)) return;
-      if (_t === _t.window) {
+      /* window 是窗口对象自有的不可伪造属性；元素上读取会落到页面可改写的 Object.prototype */
+      if (hasOwn(_t, 'window') && _t === _t.window) {
         if (isCloudflareChallengeContext(_t)) return;
         return FingerprintContext.hookWindow(_t, this);
       }
-      const cw = _t.contentWindow
+      const cw = contentWindowOf(_t)
       if (cw && cw === cw.window) {
         if (isCloudflareChallengeContext(cw)) return;
         return FingerprintContext.hookWindow(cw, this)
@@ -477,18 +558,37 @@ export class FingerprintContext {
     } catch (_) { }
   }
 
-  public makeScript = () => {
-    if (!this.args?.fun) return;
+  /**
+   * 生成注入 Worker 的脚本
+   * @param baseUrl Worker 原本的脚本地址（URL Worker 被换成 blob Worker 时），Worker 内据此修正相对地址
+   * 脚本源码与配置在注入时序列化（见 index.ts），这里只拼接基本类型，不调用页面可改写的方法
+   */
+  public makeScript = (baseUrl?: string) => {
+    const src: string | undefined = this.args?.funSrc
+    const name: string | undefined = this.args?.funName
+    const conf: string | undefined = this.args?.confJson
+    if (!src || !name || !conf) return;
 
-    const fun: (args: any) => string = this.args?.fun;
-    if (!fun || typeof fun !== 'function') return;
+    const info = this.info
+    const seed = this.seed
+    const str = (v?: string) => v == null ? 'null' : stringify(v)
+    const num = (v?: number) => v == null ? 'null' : '' + v
 
-    const options = JSON.stringify({
-      info: this.info,
-      conf: this.conf,
-      seed: this.seed,
-    })
-    return `${fun.toString()};${fun.name}({options:${options}});`;
+    const options = '{"info":{'
+      + '"host":' + str(info.host)
+      + ',"seed":' + num(info.seed)
+      + ',"hooked":' + (info.hooked ? 'true' : 'false')
+      + ',"browser":' + str(info.browser)
+      + '},"conf":' + conf
+      + ',"seed":{'
+      + '"page":' + num(seed.page)
+      + ',"domain":' + num(seed.domain)
+      + ',"browser":' + num(seed.browser)
+      + ',"global":' + num(seed.global)
+      + '}'
+      + (baseUrl ? ',"baseUrl":' + str(baseUrl) : '')
+      + '}'
+    return src + ';' + name + '({options:' + options + '});';
   }
 
 }

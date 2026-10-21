@@ -22,3 +22,16 @@ test('isEmojiProbe only accepts short emoji text', () => {
   assert.equal(isEmojiProbe('plain'), false)
   assert.equal(isEmojiProbe('😀'.padEnd(EMOJI_TEXT_MAX_LENGTH + 1, 'x')), false)
 })
+
+test('hasEmoji keeps working after the page overrides RegExp methods', () => {
+  const { exec, test: rtest } = RegExp.prototype
+  try {
+    RegExp.prototype.exec = () => null
+    RegExp.prototype.test = () => false
+    assert.equal(hasEmoji('😀'), true)
+    assert.equal(isEmojiProbe('😀'), true)
+  } finally {
+    RegExp.prototype.exec = exec
+    RegExp.prototype.test = rtest
+  }
+})

@@ -25,7 +25,9 @@ export const MoreConfigView = ({ className }: MoreConfigViewProps) => {
   const clipboardExport = async () => {
     await requestPermission('clipboardWrite')
 
-    await navigator.clipboard.writeText(JSON.stringify(storage, null, 2))
+    /* 通信标识只在本次浏览器会话内有效，不导出 */
+    const { channel: _, ...exported } = storage ?? {} as LocalStorage
+    await navigator.clipboard.writeText(JSON.stringify(exported, null, 2))
       .then(() => message.success(t('tip.config.export-ok')))
       .catch((err) => message.error(`${t('tip.config.export-fail')}: ${err?.message}`))
   }
