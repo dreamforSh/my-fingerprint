@@ -6,6 +6,9 @@ import { reRequestHeader } from "./request";
 import { logManager } from '@/utils/log';
 import { removeBrowsingData } from "./browsing-data";
 import { reIpInfo, reIpInfoAlarm } from "./ip-info";
+import { getCsp, watchCsp } from "./csp";
+
+watchCsp()
 
 const logger = logManager.createLogger(__LOG_PREFIX_FILE_PATH__);
 
@@ -131,6 +134,17 @@ chrome.runtime.onMessage.addListener(((msg, sender, sendResponse) => {
     case 'ip.refresh': {
       reIpInfo().then((v) => {
         sendResponse<'ip.refresh'>(v)
+      })
+      return true
+    }
+    case 'csp.get': {
+      const tabId = sender.tab?.id
+      if (tabId == null || sender.frameId !== 0 || !sender.url) {
+        sendResponse<'csp.get'>({ known: false, restrictive: true })
+        return false
+      }
+      getCsp(tabId, sender.url).then((v) => {
+        sendResponse<'csp.get'>(v)
       })
       return true
     }

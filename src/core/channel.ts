@@ -37,6 +37,7 @@ const messageEventProto = typeof MessageEvent === 'undefined' ? undefined : Mess
 const getMessageData = messageEventProto && getOwnPropertyDescriptor(messageEventProto, 'data')?.get
 const getMessageSource = messageEventProto && getOwnPropertyDescriptor(messageEventProto, 'source')?.get
 const getMessageOrigin = messageEventProto && getOwnPropertyDescriptor(messageEventProto, 'origin')?.get
+const getCustomEventDetail = typeof CustomEvent === 'undefined' ? undefined : getOwnPropertyDescriptor(CustomEvent.prototype, 'detail')?.get
 
 /**
  * 带种子的 53 位字符串哈希（cyrb53）
@@ -146,6 +147,23 @@ export const relayNotice = (kind: string, json: string) => {
 }
 
 /* ---------- 接收 ---------- */
+
+/**
+ * 监听内容脚本发来的事件（事件名为通道事件名加后缀，页面不知道事件名）
+ * detail 为字符串，可在内容脚本与页面的不同 world 之间传递
+ */
+export const onContentEvent = (suffix: string, listener: (detail: string) => void) => {
+  if (!nativeAddEventListener || !getCustomEventDetail) return;
+  apply(nativeAddEventListener, window, [state.event + suffix, (ev: Event) => {
+    let detail: unknown
+    try {
+      detail = apply(getCustomEventDetail, ev, [])
+    } catch (_) {
+      return
+    }
+    if (typeof detail === 'string') listener(detail)
+  }])
+}
 
 type Listener = (payload: string, source: MessageEventSource | null, origin: string) => void
 

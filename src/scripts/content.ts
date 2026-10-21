@@ -42,9 +42,18 @@ const snedBadgeInfo = debounce(() => {
  * 事件名每次浏览器会话随机生成（见 background/storage.ts），页面不知道事件名，无法监听或伪造
  * detail 格式：`fp|{json}` 或 `iframe|{json}`
  */
+const cspQuery = sendToBackground({ type: 'csp.get' }).catch(() => undefined)
+
 chrome.storage.local.get('channel').then(({ channel }) => {
   const id = (channel as StorageChannel | undefined)?.id
   if (!id) return;
+
+  /* 页面 CSP 是否限制 Worker：交给核心脚本，决定能否把 URL Worker 换成 blob Worker */
+  cspQuery.then((csp) => {
+    if (!csp?.known) return;
+    window.dispatchEvent(new CustomEvent(id + ':csp', { detail: csp.restrictive ? 'deny' : 'allow' }))
+  })
+
   window.addEventListener(id, (ev) => {
     const detail = (ev as CustomEvent).detail
     if (typeof detail !== 'string') return;

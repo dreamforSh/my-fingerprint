@@ -43,6 +43,7 @@ export const chromeManifest: ManifestV3Export = {
     'declarativeNetRequest',
     'privacy',
     'alarms',
+    'webRequest',
   ],
   optional_permissions: [
     "userScripts",
@@ -83,6 +84,7 @@ export const firefoxManifest: ManifestV3Export = {
     'declarativeNetRequest',
     'privacy',
     'alarms',
+    'webRequest',
   ],
   optional_permissions: [
     "userScripts",

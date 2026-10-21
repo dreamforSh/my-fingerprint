@@ -13,6 +13,8 @@ import {
   nodeGet,
   nodeListAt,
   rangeGet,
+  attrOf,
+  queryAll,
   rectGet,
   rectListLength,
   rectSet,
@@ -27,10 +29,13 @@ import { base64ToUint8Array } from '@/utils/array';
 import { hasCjk, hasCjkFontFamily, isCjkLocalVoice, maskCjk, stripCjkFontFamilies } from './cjk';
 import { EMOJI_TEXT_MAX_LENGTH, isEmojiProbe } from './emoji';
 import { isCloudflareCaller } from './cloudflare';
+import { addFragColorOffset, fragmentOutputs } from './glsl';
+import { adapterInfoOf } from './gpu';
+import { isRestrictiveForWorkers } from './csp';
 import {
   ITERATOR, NativeMap, NativeSet, NativeWeakMap, NativeWeakSet, SET_METHODS, apply, bind, construct, defineProperty,
-  floor, getOwnPropertyDescriptor, hasOwn, isArray, isBinaryData, mapDelete, mapGet, mapSet, nullObject, numIsNaN,
-  numParseFloat, objectCreate, objectFreeze, promiseThen, reflectGet, regExec, setAdd, setHas, strIndexOf, strSlice,
+  floor, getOwnPropertyDescriptor, getPrototypeOf, hasOwn, isArray, isBinaryData, mapDelete, mapGet, mapSet, nullObject, numIsNaN,
+  numParseFloat, objectCreate, objectFreeze, promiseThen, reflectGet, regExec, setAdd, setHas, strIndexOf, strSlice, stringify,
   strToLowerCase, typedArrayName, uncurryThis, weakMapGet, weakMapSet, weakSetAdd, weakSetDelete, weakSetHas,
 } from './intrinsics';
 
@@ -141,50 +146,20 @@ const maskLocalFonts = (src: string, isAllowed: (name: string) => boolean) => {
 }
 
 const isSpace = (c: string | undefined) => c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\v'
-const isDigit = (c: string | undefined) => c != null && c >= '0' && c <= '9'
-const GL_FRAG_COLOR = 'gl_FragColor'
-const GL_SEPARATORS = ',+-*/()'
 
 /**
- * 表达式中数字常量的个数（以数字或「.数字」开头的项，与 parseFloat 能解析出数字一致）
+ * 以页面传入的对象为原型创建对象，并设置一个自有属性
+ * 改写字典参数的某一项：其余项仍由原生方法从页面对象读取（每项只读取一次）
  */
-const countConstants = (expr: string) => {
-  let count = 0
-  let start = 0
-  for (let i = 0; i <= expr.length; i++) {
-    if (i < expr.length && strIndexOf(GL_SEPARATORS, expr[i]) === -1) continue;
-    let j = start
-    while (j < i && isSpace(expr[j])) j++
-    if (j < i && (isDigit(expr[j]) || (expr[j] === '.' && isDigit(expr[j + 1])))) count++
-    start = i + 1
-  }
-  return count
-}
-
-/**
- * 为片元着色器的 `gl_FragColor = expr;` 叠加颜色偏移，常量颜色（3 个以上数字常量）保持不变
- * 手动解析，不使用页面可改写的 String.prototype.replace / RegExp 方法
- */
-const addFragColorOffset = (source: string, offset: string) => {
-  let from = 0
-  while (true) {
-    const at = strIndexOf(source, GL_FRAG_COLOR, from)
-    if (at === -1) return source;
-    from = at + 1
-
-    let i = at + GL_FRAG_COLOR.length
-    while (isSpace(source[i])) i++
-    if (source[i] !== '=' || source[i + 1] === '=') continue;
-    i++
-    while (isSpace(source[i])) i++
-
-    const end = strIndexOf(source, ';', i)
-    if (end <= i) continue;
-
-    const expr = strSlice(source, i, end)
-    if (countConstants(expr) >= 3) return source;
-    return strSlice(source, 0, at) + GL_FRAG_COLOR + ' = ' + offset + ' + (' + expr + ');' + strSlice(source, end + 1)
-  }
+const derive = (proto: object, key: string, value: any) => {
+  const res = objectCreate(proto)
+  const desc: PropertyDescriptor = nullObject()
+  desc.value = value
+  desc.writable = true
+  desc.enumerable = true
+  desc.configurable = true
+  defineProperty(res, key, desc)
+  return res
 }
 
 /**
@@ -353,8 +328,9 @@ export const hookTasks: HookTask[] = [
         'append', 'prepend', 'replaceChildren', 'insertAdjacentElement', 'insertAdjacentHTML',
         'before', 'after', 'replaceWith', 'setHTMLUnsafe',
       ], handler);
+      /* document.write 写入的 iframe：写入后立即注入，页面紧接着读取也是伪装值 */
       useProxy(win.Document.prototype, [
-        'append', 'prepend', 'replaceChildren',
+        'append', 'prepend', 'replaceChildren', 'write', 'writeln',
       ], handler);
       useProxy(win.ShadowRoot.prototype, [
         'append', 'prepend', 'replaceChildren', 'setHTMLUnsafe',
@@ -369,7 +345,7 @@ export const hookTasks: HookTask[] = [
    * Worker
    */
   {
-    onEnable: ({ win, conf, useProxy, makeScript }) => {
+    onEnable: ({ win, conf, info, useProxy, makeScript }) => {
       if (!win) return;
 
       /*
@@ -432,6 +408,75 @@ export const hookTasks: HookTask[] = [
         return url;
       }
 
+      /*
+       * URL 加载的专用 Worker 换成 blob Worker：先运行注入脚本，再加载原脚本（Worker 内修正地址，见下一个任务）
+       * blob Worker 继承页面的 CSP：只有确认页面没有限制 Worker 的策略时才替换（响应头由后台读取，<meta> 在此检查），
+       * 未知时保持原样；SharedWorker 换成 blob 会失去共享语义，不替换
+       */
+      const NativeURL = win.URL
+      const getUrlHref = getOwnPropertyDescriptor(NativeURL.prototype, 'href')!.get!
+      const getUrlOrigin = getOwnPropertyDescriptor(NativeURL.prototype, 'origin')!.get!
+      const getUrlProtocol = getOwnPropertyDescriptor(NativeURL.prototype, 'protocol')!.get!
+      const getBaseURI = getOwnPropertyDescriptor(win.Node.prototype, 'baseURI')!.get!
+
+      const metaRestricts = (doc: Document) => {
+        const metas = queryAll(doc, 'meta[http-equiv]')
+        for (let i = 0; i < metas.length; i++) {
+          const equiv = attrOf(metas[i], 'http-equiv')
+          if (equiv && strToLowerCase(equiv) === 'content-security-policy' && isRestrictiveForWorkers(attrOf(metas[i], 'content'))) {
+            return true
+          }
+        }
+        return false
+      }
+
+      const wrapUrlWorker = (url: string, options: any): { url: string, options: any } | undefined => {
+        if (info.workerBlob !== 'allow' || metaRestricts(win.document)) return;
+
+        /* 只处理同源的 http(s) 脚本，其余交给原生构造函数（跨源时原生会抛错） */
+        let parsed: URL
+        try {
+          parsed = construct(NativeURL, [url, apply(getBaseURI, win.document, [])])
+        } catch (_) {
+          return
+        }
+        const protocol = apply(getUrlProtocol, parsed, [])
+        if (protocol !== 'http:' && protocol !== 'https:') return;
+        if (apply(getUrlOrigin, parsed, []) !== win.location.origin) return;
+        const abs: string = apply(getUrlHref, parsed, [])
+
+        /* 读取一次 type 并写成自有属性，原生方法不会再读取页面的 getter */
+        let type = 'classic'
+        let opts = options
+        if (options != null && (typeof options === 'object' || typeof options === 'function')) {
+          const raw = options.type
+          if (raw !== undefined) type = `${raw}`
+          opts = derive(options, 'type', type)
+        } else if (options !== undefined) {
+          return
+        }
+        if (type !== 'classic' && type !== 'module') return;
+
+        const injected = makeScript(abs)
+        if (injected == null) return;
+
+        const blobOptions: BlobPropertyBag = nullObject()
+        blobOptions.type = 'application/javascript'
+        const toBlobUrl = (code: string): string => apply(rawCreateObjectURL, urlObject, [
+          construct(NativeBlob, [ownIterable<BlobPart>([code]), blobOptions]),
+        ])
+
+        const prelude = '(function(){' + injected + '})();'
+        /*
+         * 模块 Worker：注入脚本单独成为模块，按顺序静态导入后再导入原脚本，整个模块图同步求值完成，
+         * 页面在创建后立即发送的消息不会在原脚本设置 onmessage 之前到达（动态 import 会出现这种情况）
+         */
+        const code = type === 'module' ?
+          'import ' + stringify(toBlobUrl(prelude)) + ';\nimport ' + stringify(abs) + ';' :
+          prelude + '\nimportScripts(' + stringify(abs) + ');'
+        return { url: toBlobUrl(code), options: opts }
+      }
+
       {
         const makeHandler = (name: string) => ({
           construct(target: any, args: any, newTarget: any) {
@@ -447,7 +492,15 @@ export const hookTasks: HookTask[] = [
               }
             } else if (args.length > 0 && typeof url !== 'symbol') {
               /* 与原生一致地转为字符串（只转换一次），URL 对象等也能识别 */
-              args[0] = createScriptUrl('' + url);
+              const str = '' + url
+              args[0] = createScriptUrl(str);
+              if (args[0] === str && name === 'web') {
+                const wrapped = wrapUrlWorker(str, args[1])
+                if (wrapped) {
+                  args[0] = wrapped.url
+                  if (args.length > 1) args[1] = wrapped.options
+                }
+              }
             }
 
             return construct(target, args, newTarget) as Worker;
@@ -475,6 +528,93 @@ export const hookTasks: HookTask[] = [
         });
       }
     }
+  },
+
+  /**
+   * URL Worker 被换成 blob Worker 后，修正 Worker 内的地址：
+   * location 返回原脚本地址；importScripts、fetch、XMLHttpRequest 等的相对地址以原脚本地址为基准
+   */
+  {
+    condition: ({ worker, baseUrl }) => !!worker && !!baseUrl,
+    onEnable: ({ gthis, baseUrl, useProxy, useGetterProxy }) => {
+      const base = baseUrl!
+      const NativeURL = gthis.URL
+      const urlProto = NativeURL.prototype
+      const getHref = getOwnPropertyDescriptor(urlProto, 'href')!.get!
+
+      /* WorkerLocation */
+      const keys = ['href', 'origin', 'protocol', 'host', 'hostname', 'port', 'pathname', 'search', 'hash']
+      const parsed = construct(NativeURL, [base])
+      const parts: Record<string, string> = nullObject()
+      for (let i = 0; i < keys.length; i++) {
+        parts[keys[i]] = apply(getOwnPropertyDescriptor(urlProto, keys[i])!.get!, parsed, [])
+      }
+      const locationProto = (gthis as any).WorkerLocation?.prototype
+      if (locationProto) {
+        useGetterProxy(locationProto, keys, (key: string, getter) => ({
+          apply(target: any, thisArg: any) {
+            apply(getter, thisArg, [])
+            return parts[key]
+          }
+        }))
+        useProxy(locationProto, 'toString', {
+          apply(target: any, thisArg: any, args: any[]) {
+            apply(target, thisArg, args)
+            return parts.href
+          }
+        })
+      }
+
+      /* 相对地址以原脚本地址为基准；无法解析时保持原样，交给原生方法报错 */
+      const resolve = (input: unknown) => {
+        const str = `${input as any}`
+        try {
+          return apply(getHref, construct(NativeURL, [str, base]), []) as string
+        } catch (_) {
+          return str
+        }
+      }
+
+      const getRequestUrl = gthis.Request && getOwnPropertyDescriptor(gthis.Request.prototype, 'url')?.get
+      const isRequest = (v: unknown) => {
+        if (!getRequestUrl || v == null || typeof v !== 'object') return false;
+        try {
+          apply(getRequestUrl, v, [])
+          return true
+        } catch (_) {
+          return false
+        }
+      }
+
+      useProxy(gthis, 'importScripts', {
+        apply(target: any, thisArg: any, args: any[]) {
+          for (let i = 0; i < args.length; i++) args[i] = resolve(args[i])
+          return apply(target, thisArg, args)
+        }
+      })
+      useProxy(gthis, 'fetch', {
+        apply(target: any, thisArg: any, args: any[]) {
+          if (args.length > 0 && !isRequest(args[0])) args[0] = resolve(args[0])
+          return apply(target, thisArg, args)
+        }
+      })
+      gthis.XMLHttpRequest && useProxy(gthis.XMLHttpRequest.prototype, 'open', {
+        apply(target: any, thisArg: any, args: any[]) {
+          if (args.length > 1) args[1] = resolve(args[1])
+          return apply(target, thisArg, args)
+        }
+      })
+      const ctors = ['Request', 'WebSocket', 'EventSource', 'Worker', 'SharedWorker']
+      for (let i = 0; i < ctors.length; i++) {
+        if (!(gthis as any)[ctors[i]]) continue;
+        useProxy(gthis as any, ctors[i], {
+          construct(target: any, args: any[], newTarget: any): object {
+            if (args.length > 0 && !isRequest(args[0])) args[0] = resolve(args[0])
+            return construct(target, args, newTarget)
+          }
+        })
+      }
+    },
   },
 
   /**
@@ -626,6 +766,24 @@ export const hookTasks: HookTask[] = [
 
         const vecOffset = `vec4(${randFn()},${randFn()},${randFn()},0)`;
 
+        /* 以原生 getShaderParameter 确认是片元着色器：ES 3.00 顶点着色器的 out vec4 是传给片元的变量，不能改 */
+        const FRAGMENT_SHADER = 0x8B30
+        const SHADER_TYPE = 0x8B4F
+        const getShaderParameters = [
+          gthis.WebGLRenderingContext?.prototype.getShaderParameter,
+          gthis.WebGL2RenderingContext?.prototype.getShaderParameter,
+        ]
+        const isFragmentShader = (gl: any, shader: any) => {
+          for (let i = 0; i < getShaderParameters.length; i++) {
+            const fn = getShaderParameters[i]
+            if (!fn) continue;
+            try {
+              return apply(fn, gl, [shader, SHADER_TYPE]) === FRAGMENT_SHADER
+            } catch (_) { }
+          }
+          return false
+        }
+
         const handler = {
           apply: (target: any, thisArg: WebGLRenderingContext | WebGL2RenderingContext, args: any) => {
             if (isCloudflareCaller()) {
@@ -633,9 +791,13 @@ export const hookTasks: HookTask[] = [
             }
             notify('strong.webgl')
 
-            const source = args[1]
-            if (source && typeof source === 'string') {
-              args[1] = addFragColorOffset(source, vecOffset);
+            /* 与原生一致地转为字符串：页面传入带 toString 的对象也会被处理 */
+            if (args.length >= 2) {
+              const source = toDOMString(args[1])
+              args[1] = source
+              if (fragmentOutputs(source).length && isFragmentShader(thisArg, args[0])) {
+                args[1] = addFragColorOffset(source, vecOffset);
+              }
             }
 
             return apply(target, thisArg, args);
@@ -652,7 +814,7 @@ export const hookTasks: HookTask[] = [
    */
   {
     condition: ({ conf, isDefault }) => !isDefault(conf.fp.normal.gpuInfo),
-    onEnable: ({ gthis, conf, useHookMode, useProxy }) => {
+    onEnable: ({ gthis, conf, useHookMode, useProxy, useGetterProxy }) => {
       const fps = conf.fp.normal
 
       /* WEBGL_debug_renderer_info 的常量：不经由页面可改写的 getExtension 获取 */
@@ -681,6 +843,20 @@ export const hookTasks: HookTask[] = [
         }
         useProxy(gthis.WebGLRenderingContext.prototype, 'getParameter', handler);
         useProxy(gthis.WebGL2RenderingContext.prototype, 'getParameter', handler);
+
+        /* WebGPU 的适配器信息与伪装的 WebGL 显卡一致（GPUAdapter.info、GPUDevice.adapterInfo 都是它的实例） */
+        const infoProto = (gthis as any).GPUAdapterInfo?.prototype
+        if (infoProto) {
+          const adapterInfo: Record<string, string> = nullObject()
+          const derived = adapterInfoOf(info.vendor, info.renderer)
+          adapterInfo.vendor = derived.vendor
+          adapterInfo.architecture = derived.architecture
+          adapterInfo.device = derived.device
+          adapterInfo.description = derived.description
+          useGetterProxy(infoProto, ['vendor', 'architecture', 'device', 'description'], (key: string, getter) => (
+            valueGetterHandler(getter, adapterInfo[key], 'weak.gpuInfo')
+          ))
+        }
       }
     }
   },
@@ -1202,6 +1378,167 @@ export const hookTasks: HookTask[] = [
           return apply(target, thisArg, args);
         }
       })
+
+      /* Temporal：未指定时区时使用自定义时区 */
+      const Temporal = (gthis as any).Temporal
+      if (Temporal?.Now) {
+        /* 与 Intl 一致的规范化名称 */
+        let zoneId: string = tzValue.zone
+        try {
+          const fmt = construct(_DateTimeFormat, ['en-US', options({ timeZone: tzValue.zone })])
+          zoneId = apply(_DateTimeFormat.prototype.resolvedOptions, fmt, []).timeZone
+        } catch (_) { }
+
+        useProxy(Temporal.Now, 'timeZoneId', {
+          apply() {
+            notify('weak.timezone')
+            return zoneId
+          }
+        })
+        useProxy(Temporal.Now, ['zonedDateTimeISO', 'plainDateTimeISO', 'plainDateISO', 'plainTimeISO'], {
+          apply(target: any, thisArg: any, args: any[]) {
+            notify('weak.timezone')
+            if (args[0] === undefined) args[0] = zoneId
+            return apply(target, thisArg, args)
+          }
+        })
+        /* Instant 没有时区，格式化时使用 DateTimeFormat 的默认时区 */
+        Temporal.Instant && useProxy(Temporal.Instant.prototype, 'toLocaleString', {
+          apply(target: any, thisArg: any, args: any[]) {
+            notify('weak.timezone')
+            args[0] = useCustomLocales(args[0]);
+            args[1] = useCustomTimeZone(args[1]);
+            return apply(target, thisArg, args)
+          }
+        })
+      }
+    },
+  },
+
+  /**
+   * Intl 默认语言
+   * 伪装了 navigator.languages 时，各 Intl 服务与 toLocaleString、localeCompare 等方法的默认语言随之一致
+   */
+  {
+    condition: ({ conf: { fp: { navigator: n } } }) => n.languages.type === HookType.value && !!n.languages.value?.length,
+    onEnable: ({ gthis, conf, useProxy, useHookMode }) => {
+      const languages = useHookMode(conf.fp.navigator.languages).value as string[]
+      const Intl = gthis.Intl
+      if (!Intl || !languages?.length) return;
+
+      const RealmArray = gthis.Array
+      const LOCALES = new RealmArray()
+      for (let i = 0; i < languages.length; i++) LOCALES[i] = languages[i]
+
+      const getLocaleBaseName = Intl.Locale && getOwnPropertyDescriptor(Intl.Locale.prototype, 'baseName')?.get
+      const isLocale = (v: any) => {
+        if (!getLocaleBaseName || v == null || typeof v !== 'object') return false;
+        try {
+          apply(getLocaleBaseName, v, [])
+          return true
+        } catch (_) {
+          return false
+        }
+      }
+
+      /**
+       * 未指定语言时使用伪装语言；指定时追加为备选，页面请求的语言不受支持时不会回退到真实的默认语言
+       * 与 Intl 一致地读取语言列表（字符串、Intl.Locale 或类数组），null 交给原生方法抛错
+       */
+      const withLocales = (locales: any) => {
+        if (locales === undefined) return LOCALES;
+        if (locales === null) return locales;
+        const res = new RealmArray()
+        if (typeof locales === 'string' || isLocale(locales)) {
+          res[0] = locales
+        } else if (typeof locales === 'object') {
+          const len = locales.length
+          for (let i = 0; i < len; i++) res[res.length] = locales[i]
+        }
+        for (let i = 0; i < languages.length; i++) res[res.length] = languages[i]
+        return res
+      }
+
+      /* Intl 服务的构造函数 */
+      {
+        const handler = {
+          construct(target: any, args: any[], newTarget: any): object {
+            notify('weak.languages')
+            args[0] = withLocales(args[0])
+            return construct(target, args, newTarget)
+          },
+          apply(target: any, thisArg: any, args: any[]) {
+            notify('weak.languages')
+            args[0] = withLocales(args[0])
+            return apply(target, thisArg, args)
+          },
+        }
+        const names = [
+          'Collator', 'DateTimeFormat', 'NumberFormat', 'PluralRules', 'RelativeTimeFormat', 'ListFormat',
+          'DisplayNames', 'Segmenter', 'DurationFormat',
+        ]
+        for (let i = 0; i < names.length; i++) {
+          if ((Intl as any)[names[i]]) useProxy(Intl as any, names[i], handler)
+        }
+      }
+
+      /* 以 (locales, options) 为参数的方法：index 为 locales 参数的位置 */
+      const localesAt = (index: number) => ({
+        apply(target: any, thisArg: any, args: any[]) {
+          args[index] = withLocales(args[index])
+          return apply(target, thisArg, args)
+        }
+      })
+
+      /* 常用路径复用格式化器：每次传入语言列表会让引擎重新创建 ICU 对象，排序、格式化大量数据时很慢 */
+      const RawCollator = Intl.Collator
+      const RawNumberFormat = Intl.NumberFormat
+      const compare: (a: string, b: string) => number = apply(
+        getOwnPropertyDescriptor(RawCollator.prototype, 'compare')!.get!, construct(RawCollator, [LOCALES]), [],
+      )
+      const formatNumber: (n: number) => string = apply(
+        getOwnPropertyDescriptor(RawNumberFormat.prototype, 'format')!.get!, construct(RawNumberFormat, [LOCALES]), [],
+      )
+      const numberValueOf = gthis.Number.prototype.valueOf
+
+      useProxy(gthis.String.prototype, 'localeCompare', {
+        apply(target: any, thisArg: any, args: any[]) {
+          if (thisArg != null && args[1] === undefined && args[2] === undefined) {
+            return compare(`${thisArg}`, `${args[0]}`)
+          }
+          args[1] = withLocales(args[1])
+          return apply(target, thisArg, args)
+        }
+      })
+      useProxy(gthis.Number.prototype, 'toLocaleString', {
+        apply(target: any, thisArg: any, args: any[]) {
+          if (args[0] === undefined && args[1] === undefined) {
+            let n: number | undefined
+            try {
+              n = apply(numberValueOf, thisArg, [])
+            } catch (_) { }
+            if (n !== undefined) return formatNumber(n)
+          }
+          args[0] = withLocales(args[0])
+          return apply(target, thisArg, args)
+        }
+      })
+      useProxy(gthis.String.prototype, ['toLocaleUpperCase', 'toLocaleLowerCase'], localesAt(0))
+      useProxy(gthis.Date.prototype, ['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString'], localesAt(0))
+      useProxy(gthis.Array.prototype, 'toLocaleString', localesAt(0))
+      useProxy(getPrototypeOf(gthis.Uint8Array.prototype), 'toLocaleString', localesAt(0))
+      gthis.BigInt && useProxy(gthis.BigInt.prototype, 'toLocaleString', localesAt(0))
+
+      const Temporal = (gthis as any).Temporal
+      if (Temporal) {
+        const types = [
+          'Instant', 'ZonedDateTime', 'PlainDate', 'PlainTime', 'PlainDateTime', 'PlainYearMonth', 'PlainMonthDay', 'Duration',
+        ]
+        for (let i = 0; i < types.length; i++) {
+          const proto = Temporal[types[i]]?.prototype
+          proto?.toLocaleString && useProxy(proto, 'toLocaleString', localesAt(0))
+        }
+      }
     },
   },
 
@@ -1433,18 +1770,6 @@ export const hookTasks: HookTask[] = [
       const RealmArray = win.Array
       const RealmObject = win.Object
       const RealmFloat32Array = win.Float32Array
-
-      /* 以给定原型创建对象并设置自有属性：其余属性仍从页面传入的对象读取（只读取一次） */
-      const derive = (proto: object, key: string, value: any) => {
-        const res = objectCreate(proto)
-        const desc: PropertyDescriptor = nullObject()
-        desc.value = value
-        desc.writable = true
-        desc.enumerable = true
-        desc.configurable = true
-        defineProperty(res, key, desc)
-        return res
-      }
 
       /* 读取序列：数组按下标，其他可迭代对象经其迭代器读取一次 */
       const toList = (v: any): any[] | undefined => {

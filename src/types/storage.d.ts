@@ -119,4 +119,5 @@ type WindowStorage = {
   seed: number
   hooked: boolean
   browser?: BrowserType
+  workerBlob?: 'allow' | 'deny'  // 页面 CSP 是否允许把 URL Worker 换成 blob Worker，未知时不替换
 }

@@ -100,6 +100,9 @@ export class FingerprintContext {
 
   public args: Record<string, any>;
 
+  /** URL Worker 被换成 blob Worker 时的原脚本地址 */
+  public baseUrl?: string;
+
   /// hook索引
   public symbol: {
     raw: symbol;
@@ -430,6 +433,7 @@ export class FingerprintContext {
     }
 
     this.args = opt.args ?? {}
+    this.baseUrl = opt.baseUrl
 
     /* 在钩子安装前取得（新窗口此时尚未运行页面脚本） */
     this.fnAccessors = nullObject()
@@ -549,9 +553,10 @@ export class FingerprintContext {
 
   /**
    * 生成注入 Worker 的脚本
+   * @param baseUrl Worker 原本的脚本地址（URL Worker 被换成 blob Worker 时），Worker 内据此修正相对地址
    * 脚本源码与配置在注入时序列化（见 index.ts），这里只拼接基本类型，不调用页面可改写的方法
    */
-  public makeScript = () => {
+  public makeScript = (baseUrl?: string) => {
     const src: string | undefined = this.args?.funSrc
     const name: string | undefined = this.args?.funName
     const conf: string | undefined = this.args?.confJson
@@ -573,7 +578,9 @@ export class FingerprintContext {
       + ',"domain":' + num(seed.domain)
       + ',"browser":' + num(seed.browser)
       + ',"global":' + num(seed.global)
-      + '}}'
+      + '}'
+      + (baseUrl ? ',"baseUrl":' + str(baseUrl) : '')
+      + '}'
     return src + ';' + name + '({options:' + options + '});';
   }
 

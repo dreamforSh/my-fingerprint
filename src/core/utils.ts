@@ -244,17 +244,29 @@ const nodeListToArray = (list: any): any[] => {
 }
 
 /**
- * 查找节点内的 iframe
+ * 按选择器查找节点（原生 querySelectorAll）
  */
-export const findIframes = (root: any): any[] => {
+export const queryAll = (root: any, selector: string): any[] => {
   if (root == null || typeof root !== 'object') return EMPTY
   for (let i = 0; i < QUERY_SELECTOR_ALL.length; i++) {
     try {
-      return nodeListToArray(apply(QUERY_SELECTOR_ALL[i], root, ['iframe']))
+      return nodeListToArray(apply(QUERY_SELECTOR_ALL[i], root, [selector]))
     } catch (_) { }
   }
   return EMPTY
 }
+
+/**
+ * 查找节点内的 iframe
+ */
+export const findIframes = (root: any): any[] => queryAll(root, 'iframe')
+
+const getAttributeFn: Function | undefined = protoOf('Element')?.getAttribute
+
+/**
+ * Element.getAttribute（原生方法）
+ */
+export const attrOf = (el: any, name: string): string | null => apply(getAttributeFn!, el, [name])
 
 /**
  * MutationRecord.addedNodes

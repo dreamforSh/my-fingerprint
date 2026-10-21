@@ -4,11 +4,30 @@ import { getBrowser } from "@/utils/equipment";
 import { logManager } from '@/utils/log';
 import { isCloudflareChallengeContext } from "./cloudflare";
 import {
-  channelWinKey, derivePageSeed, initChannel, onChannelMessage, postToWindow, relayNotice, sign, splitPayload,
+  channelWinKey, derivePageSeed, initChannel, onChannelMessage, onContentEvent, postToWindow, relayNotice, sign,
+  splitPayload,
 } from "./channel";
 import { defineProperty, fnToString, stringify } from "./intrinsics";
 
 const logger = logManager.createLogger(__LOG_PREFIX_FILE_PATH__);
+
+/**
+ * 顶层窗口的源（ancestorOrigins 的最后一项），不可用或为不透明源时返回 undefined
+ */
+const topOriginOf = (ancestors?: DOMStringList): string | undefined => {
+  if (!ancestors || !ancestors.length) return;
+  const origin = ancestors[ancestors.length - 1]
+  return origin && origin !== 'null' ? origin : undefined
+}
+
+/**
+ * 源中的主机名（注入时调用，页面脚本尚未运行）
+ */
+const hostOfOrigin = (origin: string): string | undefined => {
+  try {
+    return new URL(origin).hostname || undefined
+  } catch (_) { }
+}
 
 // @ts-ignore
 const args = _args;
@@ -99,6 +118,11 @@ const args = _args;
         window[winKey] = data;
       }
 
+      /* 页面 CSP 是否允许把 URL Worker 换成 blob Worker（后台读取响应头，经内容脚本转交） */
+      onContentEvent(':csp', (detail) => {
+        if (detail === 'allow' || detail === 'deny') data.workerBlob = detail
+      })
+
       onChannelMessage(window, (payload, source, origin) => {
         const parts = splitPayload(payload, 3);
         const type = parts[0], kind = parts[1], json = parts[2];
@@ -120,7 +144,25 @@ const args = _args;
       const data = top[winKey]
       hook(window, data)
     } catch (_) {
-      /* 跨源 */
+      /*
+       * 跨源：能经 location.ancestorOrigins 同步得知顶层源时（Chrome）立即注入，iframe 自己的脚本运行前即受保护；
+       * 页面种子无法同步取得，改由密钥与顶层源派生（同一会话、同一顶层站点内稳定）
+       */
+      const topOrigin = topOriginOf(location.ancestorOrigins)
+      const topHost = topOrigin && hostOfOrigin(topOrigin)
+      if (topHost) {
+        const loadId = 'origin:' + topOrigin
+        hook(window, {
+          host: topHost,
+          loadId,
+          seed: derivePageSeed(loadId),
+          hooked: false,
+          browser,
+        })
+        return;
+      }
+
+      /* 否则（Firefox）向顶层取得页面信息后注入 */
       let done = false
       onChannelMessage(window, (payload) => {
         if (done) return;

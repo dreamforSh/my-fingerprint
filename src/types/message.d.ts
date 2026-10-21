@@ -50,6 +50,10 @@ declare namespace BackgroundMessage {
   } | {
     type: 'ip.refresh'
     $: LocalStorageConfig['input']['ipInfo']
+  } | {
+    /* 当前文档的 CSP 是否限制 Worker（由顶层框架的内容脚本询问） */
+    type: 'csp.get'
+    $: { known: boolean, restrictive: boolean }
   }
 
   type ResultField = '$'
